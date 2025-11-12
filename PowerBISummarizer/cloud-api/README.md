@@ -27,6 +27,8 @@ Defina no Railway (ou `.env` local) os valores fornecidos:
 | `API_BASEPATH` | Prefixo dos endpoints (padrao `/api/v1`) |
 | `CORS_ALLOW_ORIGINS` | Lista separada por virgula de origens permitidas (opcional) |
 
+> Em producao (Railway) usamos `psycopg2-binary`. Se preferir `psycopg2` normal, sera preciso instalar `libpq-dev` e compiladores no container.
+
 ## Execucao local
 ```bash
 cd cloud-api
@@ -38,8 +40,8 @@ A documentacao interativa ficara em `http://localhost:8000/api/v1/docs`.
 
 ## Docker / Railway
 1. Faca push do diretorio `cloud-api` para o repositorio https://github.com/jeandsonmarques/cloud.git.
-2. No Railway, crie um novo servico a partir do repositorio e mantenha o comando padrao do Dockerfile.
-3. Configure as variaveis em *Settings -> Variables* usando os valores acima.
+2. No Railway, crie um novo servico a partir do repositorio, selecione `cloud-api` como *Root Directory* (sem incluir o nome do repositorio no caminho) e mantenha o comando padrao do Dockerfile.
+3. Configure as variaveis em *Settings -> Variables* com: `DATABASE_URL`, `JWT_SECRET`, `JWT_EXPIRES=3600` e `API_BASEPATH=/api/v1` (demais variaveis conforme necessidade).
 4. Railway fornecera a URL final (`https://<app>.up.railway.app`). Os endpoints ficarao disponiveis em `https://<app>.up.railway.app/api/v1/*`.
 
 ## Seed do banco

@@ -2,17 +2,24 @@ import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
+Base = declarative_base()
+
+
+def _normalize_db_url(url: str) -> str:
+    if url.startswith("postgresql://"):
+        return url.replace("postgresql://", "postgresql+psycopg2://", 1)
+    return url
+
 
 def _get_database_url() -> str:
-    value = os.getenv("DATABASE_URL")
-    if not value:
-        raise RuntimeError("DATABASE_URL environment variable is not set")
-    return value
+    raw = os.environ.get("DATABASE_URL", "")
+    if not raw:
+        raise RuntimeError("DATABASE_URL not set")
+    return _normalize_db_url(raw)
 
 
 engine = create_engine(_get_database_url(), pool_pre_ping=True)
-SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
-Base = declarative_base()
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
 def get_db():

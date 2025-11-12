@@ -5,8 +5,13 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
-from . import auth, schemas
-from .auth import get_current_user
+from . import schemas
+from .auth import (
+    JWT_EXPIRES,
+    authenticate_user,
+    create_access_token,
+    get_current_user,
+)
 from .db import get_db
 from .models import Layer, User
 
@@ -40,14 +45,14 @@ def readiness_check():
 
 @router.post("/login", response_model=schemas.TokenResponse)
 def login(payload: schemas.LoginRequest, db: Session = Depends(get_db)):
-    user = auth.authenticate_user(db, payload.email, payload.password)
+    user = authenticate_user(db, payload.email, payload.password)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password",
         )
-    token = auth.create_access_token(subject=str(user.id))
-    return schemas.TokenResponse(access_token=token, expires_in=auth.JWT_EXPIRES)
+    token = create_access_token(subject=str(user.id))
+    return schemas.TokenResponse(access_token=token, expires_in=JWT_EXPIRES)
 
 
 @router.get("/me", response_model=schemas.UserOut)
