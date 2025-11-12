@@ -1,6 +1,5 @@
 {
-  "name": "cloud-api-prisma",
-  "version": "1.0.0",
+  "name": "cloud-api",
   "private": true,
   "scripts": {
     "prisma:generate": "prisma generate",
