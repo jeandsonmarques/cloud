@@ -27,6 +27,8 @@ Defina no Railway (ou `.env` local) os valores fornecidos:
 | `API_BASEPATH` | Prefixo dos endpoints (padrao `/api/v1`) |
 | `CORS_ALLOW_ORIGINS` | Lista separada por virgula de origens permitidas (opcional) |
 
+Essenciais no Railway: defina `DATABASE_URL`, `JWT_SECRET`, `JWT_EXPIRES=3600` e `API_BASEPATH=/api/v1` antes do deploy.
+
 > Em producao (Railway) usamos `psycopg2-binary`. Se preferir `psycopg2` normal, sera preciso instalar `libpq-dev` e compiladores no container.
 
 ## Execucao local
@@ -38,18 +40,36 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 A documentacao interativa ficara em `http://localhost:8000/api/v1/docs`.
 
+## Prisma (migracoes e seed)
+Os comandos do Prisma garantem que o schema do Postgres esteja atualizado e que os dados base sejam criados. Rode uma vez após clonar ou sempre que subir o serviço:
+
+```bash
+cd cloud-api
+npm install
+npm run prisma:deploy   # equivalente a npx prisma migrate deploy
+npm run prisma:seed     # equivalente a npx prisma db seed
+```
+
+O arquivo `prisma/seed.js` popula o usuário `admin@demo.dev`/`demo123` e as três camadas padrão (`redes_esgoto`, `pocos_bombeamento`, `bairros`). O SQL legacy (`app/seed.sql`) continua disponível para quem preferir aplicar via `psql`.
+
 ## Docker / Railway
 1. Faca push do diretorio `cloud-api` para o repositorio https://github.com/jeandsonmarques/cloud.git.
 2. No Railway, crie um novo servico a partir do repositorio, selecione `cloud-api` como *Root Directory* (sem incluir o nome do repositorio no caminho) e mantenha o comando padrao do Dockerfile.
-3. Configure as variaveis em *Settings -> Variables* com: `DATABASE_URL`, `JWT_SECRET`, `JWT_EXPIRES=3600` e `API_BASEPATH=/api/v1` (demais variaveis conforme necessidade).
-4. Railway fornecera a URL final (`https://<app>.up.railway.app`). Os endpoints ficarao disponiveis em `https://<app>.up.railway.app/api/v1/*`.
+3. Configure as variaveis em *Settings -> Variables* com: `DATABASE_URL`, `JWT_SECRET`, `JWT_EXPIRES=3600` e `API_BASEPATH=/api/v1` (adicione as demais conforme necessidade).
+4. Logo apos o deploy, rode `npx prisma migrate deploy` e `npx prisma db seed` (ou `npm run prisma:deploy` / `npm run prisma:seed`) apontando `DATABASE_URL` para o Postgres do Railway. Isso cria as tabelas `users/layers` e garante o usuario `admin@demo.dev`.
+5. Railway fornecera a URL final (`https://<app>.up.railway.app`). Os endpoints ficarao disponiveis em `https://<app>.up.railway.app/api/v1/*`.
 
 ## Seed do banco
-O arquivo `app/seed.sql` cria as tabelas e popula:
-- Usuario: `admin@demo.dev` / senha `demo123` (bcrypt via `pgcrypto`).
-- Camadas: `redes_esgoto`, `pocos_bombeamento`, `bairros`.
+### Via Prisma (recomendado)
+Depois de definir `DATABASE_URL`, rode:
+```bash
+npm run prisma:deploy
+npm run prisma:seed
+```
+O script `prisma/seed.js` usa Prisma Client + bcrypt para garantir o usuário `admin@demo.dev`/`demo123` e as três camadas padrão.
 
-Rodar no Railway (ou local com psql):
+### Via SQL direto
+O arquivo `app/seed.sql` continua disponivel e cria tudo via `psql`:
 ```bash
 psql "$DATABASE_URL" -f app/seed.sql
 ```
