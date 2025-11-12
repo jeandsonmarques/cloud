@@ -1,0 +1,51 @@
+name: Prisma Migrate
+
+on:
+  push:
+    paths:
+      - "cloud-api/prisma/**"
+  workflow_dispatch:
+    inputs:
+      run_seed:
+        description: "Run prisma/seed.js after migrations"
+        required: false
+        default: "false"
+
+env:
+  DATABASE_URL: ${{ secrets.DATABASE_URL }}
+  ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
+  ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+
+jobs:
+  prisma-migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install npm dependencies
+        working-directory: cloud-api
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+
+      - name: Generate Prisma client
+        working-directory: cloud-api
+        run: npx prisma generate
+
+      - name: Deploy Prisma migrations
+        working-directory: cloud-api
+        run: npx prisma migrate deploy
+
+      - name: Seed admin user
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_seed == 'true' && hashFiles('cloud-api/prisma/seed.js') != '' }}
+        working-directory: cloud-api
+        run: npm run prisma:seed

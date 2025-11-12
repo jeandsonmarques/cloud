@@ -1,43 +1,43 @@
 const { PrismaClient } = require("@prisma/client");
 const bcrypt = require("bcryptjs");
 
+const databaseUrl = process.env.DATABASE_URL;
+const adminEmail = process.env.ADMIN_EMAIL;
+const adminPassword = process.env.ADMIN_PASSWORD;
+
+if (!databaseUrl) {
+  throw new Error("DATABASE_URL is required to run the Prisma seed.");
+}
+
 const prisma = new PrismaClient();
 
-async function main() {
-  const adminEmail = "admin@demo.dev";
-  const adminPassword = "demo123";
+async function ensureAdminUser() {
+  if (!adminEmail || !adminPassword) {
+    console.log("ADMIN_EMAIL and/or ADMIN_PASSWORD not provided. Skipping admin seed.");
+    return;
+  }
 
   const passwordHash = await bcrypt.hash(adminPassword, 12);
 
+  // Prisma model `User` maps to the `users` table (`email`, `password_hash`, `role` columns). Adjust if your schema differs.
   await prisma.user.upsert({
     where: { email: adminEmail },
-    update: { passwordHash, role: "admin" },
+    update: {
+      passwordHash,
+      role: "ADMIN",
+    },
     create: {
       email: adminEmail,
       passwordHash,
-      role: "admin",
+      role: "ADMIN",
     },
   });
 
-  const layerSeeds = [
-    { name: "redes_esgoto", schemaName: "public", srid: 31984, geomType: "LINESTRING" },
-    { name: "pocos_bombeamento", schemaName: "public", srid: 31984, geomType: "POINT" },
-    { name: "bairros", schemaName: "public", srid: 31984, geomType: "MULTIPOLYGON" },
-  ];
+  console.log(`Ensured admin user ${adminEmail}`);
+}
 
-  for (const layer of layerSeeds) {
-    await prisma.layer.upsert({
-      where: { name: layer.name },
-      update: {
-        schemaName: layer.schemaName,
-        srid: layer.srid,
-        geomType: layer.geomType,
-      },
-      create: layer,
-    });
-  }
-
-  console.log("Prisma seed completed");
+async function main() {
+  await ensureAdminUser();
 }
 
 main()
