@@ -11,13 +11,12 @@ async function main() {
   const hash = bcrypt.hashSync(plain, 10);
 
   // ===== Ajuste aqui se o nome da tabela/colunas forem diferentes =====
-  // Por padrão, assume tabela "users" com colunas: email, password_hash, role.
-  // Se seu model for "User" (U maiúsculo), troque prisma.users por prisma.user.
-  // Se a coluna for "passwordHash", troque o campo no create/update.
-  const upserted = await prisma.users.upsert({
+  // O model Prisma "User" mapeia a tabela "users" (colunas: email, password_hash, role).
+  // Se seu model tiver outro nome, troque prisma.user; se o campo for "password_hash" ou similar, ajuste os atributos do create/update.
+  const upserted = await prisma.user.upsert({
     where: { email },
-    update: { password_hash: hash, role },
-    create: { email, password_hash: hash, role }
+    update: { passwordHash: hash, role },
+    create: { email, passwordHash: hash, role }
   });
   // ===================================================================
 
