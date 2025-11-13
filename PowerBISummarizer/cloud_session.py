@@ -5,13 +5,24 @@ import json
 import os
 import uuid
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from qgis.PyQt.QtCore import QObject, QDateTime, QSettings, Qt, pyqtSignal
+
+try:  # pragma: no cover - QGIS ships requests by default
+    import requests
+    from requests import RequestException
+except ImportError:  # pragma: no cover - fallback when requests isn't available
+    requests = None  # type: ignore
+
+    class RequestException(Exception):
+        """Fallback exception used when requests is missing."""
+        pass
 
 
 _HERE = os.path.dirname(__file__)
 _CLOUD_SAMPLES_DIR = os.path.join(_HERE, "resources", "cloud_samples")
+REQUEST_TIMEOUT = 15
 
 
 @dataclass
@@ -174,9 +185,143 @@ class PowerBICloudSession(QObject):
         raw["layers"] = layers
         return raw
 
+    def _build_url(self, endpoint: Optional[str]) -> str:
+        endpoint = (endpoint or "").strip()
+        if endpoint.startswith("http://") or endpoint.startswith("https://"):
+            return endpoint
+        base_url = (self._config.get("base_url") or "").strip()
+        if not base_url:
+            raise ValueError("Configure a Base URL valida nas configuracoes do Cloud.")
+        if not endpoint:
+            raise ValueError("Endpoint Cloud invalido.")
+        base_url = base_url.rstrip("/")
+        if not endpoint.startswith("/"):
+            endpoint = f"/{endpoint}"
+        return f"{base_url}{endpoint}"
+
+    def _request_json(
+        self,
+        method: str,
+        endpoint: Optional[str],
+        *,
+        payload: Optional[Dict] = None,
+        headers: Optional[Dict[str, str]] = None,
+    ) -> Any:
+        if requests is None:
+            raise RuntimeError("O modulo 'requests' nao esta disponivel no ambiente do QGIS.")
+        url = self._build_url(endpoint or "")
+        try:
+            response = requests.request(
+                method.upper(),
+                url,
+                json=payload,
+                headers=headers or {},
+                timeout=REQUEST_TIMEOUT,
+            )
+            response.raise_for_status()
+        except RequestException as exc:
+            raise RuntimeError(f"Falha ao conectar ao PowerBI Cloud ({url}): {exc}") from exc
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise RuntimeError("Resposta invalida recebida do PowerBI Cloud.") from exc
+
+    def _remote_login(self, username: str, password: str) -> Dict:
+        payload = {"email": username, "password": password}
+        data = self._request_json("POST", self._config.get("login_endpoint"), payload=payload)
+        token = data.get("access_token")
+        if not token:
+            raise RuntimeError("A API nao retornou um token de acesso.")
+        issued = QDateTime.currentDateTimeUtc()
+        session = {
+            "username": username,
+            "token": token,
+            "issued": issued.toString(Qt.ISODate),
+            "mode": "remote",
+            "token_type": (data.get("token_type") or "bearer").lower(),
+        }
+        expires_in = int(data.get("expires_in") or 0)
+        if expires_in > 0:
+            session["expires_in"] = expires_in
+            session["expires_at"] = issued.addSecs(expires_in).toString(Qt.ISODate)
+        return session
+
+    def _mock_login(self, username: str) -> Dict:
+        seed = f"{username}:{uuid.uuid4().hex}"
+        token = hashlib.sha256(seed.encode("utf-8")).hexdigest()
+        issued = QDateTime.currentDateTime().toString(Qt.ISODate)
+        return {
+            "username": username,
+            "token": token[:48],
+            "issued": issued,
+            "mode": "mock",
+        }
+
+    def _auth_headers(self) -> Dict[str, str]:
+        token = self._session.get("token")
+        if not token:
+            raise RuntimeError("Sessao Cloud nao autenticada.")
+        token_type = (self._session.get("token_type") or "bearer").lower()
+        prefix = "Bearer" if token_type == "bearer" else token_type.capitalize()
+        return {"Authorization": f"{prefix} {token}"}
+
+    def _should_use_remote_layers(self) -> bool:
+        if not self.hosting_ready():
+            return False
+        if self._session.get("mode") != "remote":
+            return False
+        return self.is_authenticated()
+
+    def _fetch_remote_layers(self) -> List[Dict]:
+        payload = self._request_json("GET", self._config.get("layers_endpoint"), headers=self._auth_headers())
+        if not isinstance(payload, list):
+            raise RuntimeError("Resposta invalida do endpoint de camadas.")
+        layers: List[Dict] = []
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            schema_name = item.get("schema") or item.get("schema_name") or "public"
+            name = item.get("name") or f"camada_{item.get('id') or uuid.uuid4().hex[:4]}"
+            srid = item.get("srid")
+            layer = CloudLayer(
+                id=str(item.get("id") or name),
+                name=name,
+                description=f"Schema {schema_name} / SRID {srid or '-'}",
+                source=f"cloud://{schema_name}.{name}",
+                geometry=str(item.get("geom_type") or ""),
+                provider="postgres",
+                mock_only=False,
+                tags=["cloud", schema_name],
+            ).as_dict()
+            layer["schema"] = schema_name
+            if srid:
+                layer["srid"] = srid
+            layers.append(layer)
+        connection = {
+            "id": "powerbi_cloud_remote",
+            "name": "PowerBI Cloud",
+            "status": "online" if layers else "offline",
+            "description": (
+                "Camadas disponibilizadas pelo banco configurado."
+                if layers
+                else "Nenhuma camada retornada pela API."
+            ),
+            "layers": layers,
+            "mock_only": False,
+        }
+        return [connection]
+
     # ------------------------------------------------------------------ Public API
     def is_authenticated(self) -> bool:
-        return bool(self._session.get("token"))
+        token = self._session.get("token")
+        if not token:
+            return False
+        expires_at = self._session.get("expires_at")
+        if expires_at:
+            expiry = QDateTime.fromString(expires_at, Qt.ISODate)
+            if expiry.isValid() and expiry < QDateTime.currentDateTimeUtc():
+                return False
+        return True
 
     def session(self) -> Dict:
         return dict(self._session)
@@ -190,17 +335,18 @@ class PowerBICloudSession(QObject):
     def login(self, username: str, password: str) -> Dict:
         username = (username or "").strip()
         if not username or not password:
-            raise ValueError("Usuário e senha são obrigatórios.")
-        seed = f"{username}:{uuid.uuid4().hex}"
-        token = hashlib.sha256(seed.encode("utf-8")).hexdigest()
-        issued = QDateTime.currentDateTime().toString(Qt.ISODate)
-        self._session = {
-            "username": username,
-            "token": token[:48],
-            "issued": issued,
-        }
+            raise ValueError("Usuario e senha sao obrigatorios.")
+        if self.hosting_ready():
+            session = self._remote_login(username, password)
+        else:
+            session = self._mock_login(username)
+        self._session = dict(session)
         self._persist_session()
-        print(f"[PowerBI Cloud] Sessão autenticada para {username}.")
+        mode = self._session.get("mode") or "mock"
+        if mode == "remote":
+            print(f"[PowerBI Cloud] Sessao remota autenticada para {username}.")
+        else:
+            print(f"[PowerBI Cloud] Sessao mock autenticada para {username}.")
         self.sessionChanged.emit(dict(self._session))
         self.reload_mock_layers()
         return dict(self._session)
@@ -208,10 +354,11 @@ class PowerBICloudSession(QObject):
     def logout(self):
         if not self._session:
             return
-        username = self._session.get("username") or "usuário"
+        username = self._session.get("username") or "usuario"
         self._session = {}
         self._persist_session()
-        print(f"[PowerBI Cloud] Sessão encerrada para {username}.")
+        self.reload_mock_layers()
+        print(f"[PowerBI Cloud] Sessao encerrada para {username}.")
         self.sessionChanged.emit({})
 
     def update_config(
@@ -241,8 +388,16 @@ class PowerBICloudSession(QObject):
             self.configChanged.emit(dict(self._config))
 
     def reload_mock_layers(self):
-        self._connections = self._load_mock_connections()
-        print("[PowerBI Cloud] Catálogo mock atualizado.")
+        try:
+            if self._should_use_remote_layers():
+                self._connections = self._fetch_remote_layers()
+                print("[PowerBI Cloud] Catalogo remoto atualizado.")
+            else:
+                self._connections = self._load_mock_connections()
+                print("[PowerBI Cloud] Catalogo mock atualizado.")
+        except Exception as exc:  # pragma: no cover - runtime safeguard
+            print(f"[PowerBI Cloud] Falha ao atualizar catalogo remoto: {exc}. Voltando ao mock.")
+            self._connections = self._load_mock_connections()
         self.layersChanged.emit(self.cloud_connections())
 
     def hosting_ready(self) -> bool:
@@ -253,11 +408,14 @@ class PowerBICloudSession(QObject):
             return {"text": "Desconectado", "level": "offline"}
         username = self._session.get("username", "")
         issued = self._session.get("issued", "")
-        return {
-            "text": f"Conectado como {username}",
-            "level": "online",
-            "issued": issued,
-        }
+        mode = self._session.get("mode") or "mock"
+        if mode == "remote":
+            text = f"Cloud conectado como {username}"
+            level = "online"
+        else:
+            text = f"Modo demo ativo ({username})"
+            level = "sync"
+        return {"text": text, "level": level, "issued": issued}
 
 
 cloud_session = PowerBICloudSession()

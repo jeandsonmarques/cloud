@@ -175,11 +175,22 @@ class PowerBICloudDialog(SlimDialogBase):
             QMessageBox.warning(self, "PowerBI Cloud", "Informe usuario e senha.")
             return
         try:
-            cloud_session.login(username, password)
+            session_payload = cloud_session.login(username, password)
+            mode = session_payload.get("mode") or "mock"
+            if mode == "remote":
+                message = (
+                    f"Sessao Cloud autenticada para {username}.\n"
+                    "Catalogo carregado a partir da API configurada."
+                )
+            else:
+                message = (
+                    f"Sessao mock ativa para {username}.\n"
+                    "Ative 'Hospedagem ativa' quando o deploy estiver pronto para usar o banco remoto."
+                )
             QMessageBox.information(
                 self,
                 "PowerBI Cloud",
-                f"Sessao iniciada para {username}. Expanda o navegador para ver as camadas.",
+                message,
             )
         except ValueError as exc:
             QMessageBox.warning(self, "PowerBI Cloud", str(exc))
@@ -194,7 +205,11 @@ class PowerBICloudDialog(SlimDialogBase):
     def _refresh_layers(self):
         cloud_session.reload_mock_layers()
         self._on_layers_changed()
-        QMessageBox.information(self, "PowerBI Cloud", "Catalogo mock atualizado.")
+        if cloud_session.session().get("mode") == "remote" and cloud_session.hosting_ready():
+            message = "Catalogo Cloud atualizado a partir da API."
+        else:
+            message = "Catalogo mock atualizado."
+        QMessageBox.information(self, "PowerBI Cloud", message)
 
     def _open_browser_hint(self):
         QMessageBox.information(
@@ -244,12 +259,17 @@ class PowerBICloudDialog(SlimDialogBase):
             """
         )
 
+    def _format_timestamp(self, iso_text: str) -> str:
+        stamp = QDateTime.fromString(iso_text, Qt.ISODate)
+        if stamp.isValid():
+            return stamp.toString("dd/MM HH:mm")
+        return iso_text
+
     def _update_session_ui(self):
         payload = cloud_session.status_payload()
         level = payload.get("level") or "offline"
-        text = payload.get("text") or "Desconectado"
-        self._set_status_badge(level, text)
-        self.session_detail.setText(text)
+        status_text = payload.get("text") or "Desconectado"
+        self._set_status_badge(level, status_text)
         is_auth = cloud_session.is_authenticated()
         self.login_btn.setEnabled(not is_auth)
         self.user_edit.setEnabled(not is_auth)
@@ -257,6 +277,22 @@ class PowerBICloudDialog(SlimDialogBase):
         self.logout_btn.setEnabled(is_auth)
         if is_auth:
             self.user_edit.setText(cloud_session.session().get("username", ""))
+        session_details = []
+        if is_auth:
+            session_meta = cloud_session.session()
+            issued = session_meta.get("issued")
+            if issued:
+                session_details.append(f"Iniciada em {self._format_timestamp(issued)}.")
+            if session_meta.get("mode") == "remote":
+                expires_at = session_meta.get("expires_at")
+                if expires_at:
+                    session_details.append(f"Token expira em {self._format_timestamp(expires_at)}.")
+                session_details.append("Conectado ao banco remoto configurado.")
+            else:
+                session_details.append("Modo demonstracao usando camadas mock.")
+        else:
+            session_details.append("Status: aguardando login.")
+        self.session_detail.setText("\n".join(session_details))
         self.warning_label.setVisible(not cloud_session.hosting_ready())
 
     def _update_config_ui(self):
