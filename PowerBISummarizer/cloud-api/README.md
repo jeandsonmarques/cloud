@@ -22,6 +22,7 @@ Defina no Railway (ou `.env` local) os valores fornecidos:
 | Variavel | Descricao |
 | --- | --- |
 | `DATABASE_URL` | URL completa do Postgres (ex.: `postgresql://...`) |
+| `URL_DO_BANCO_DE_DADOS` | Fallback legacy usado enquanto o Railway ainda injeta esta variavel |
 | `JWT_SECRET` | Segredo para assinar tokens JWT |
 | `JWT_EXPIRES` | Expiracao em segundos (ex.: `3600`) |
 | `API_BASEPATH` | Prefixo dos endpoints (padrao `/api/v1`) |
@@ -39,6 +40,26 @@ pip install -r requirements.txt
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 A documentacao interativa ficara em `http://localhost:8000/api/v1/docs`.
+
+## Inicializar banco no Railway (local)
+1. Crie um arquivo `.env` na pasta `cloud-api` apontando para o Postgres do Railway (ou para o seu Postgres local):
+   ```bash
+   echo DATABASE_URL="postgresql://postgres:SENHA@trolley.proxy.rlwy.net:18067/ferrovia" > .env
+   ```
+   > A aplicacao primeiro tenta `DATABASE_URL`. Se estiver vazia, cai automaticamente para `URL_DO_BANCO_DE_DADOS`, mantendo compatibilidade com variaveis antigas.
+2. Instale as dependencias Python (uma vez):
+   ```bash
+   pip install -r requirements.txt
+   ```
+3. Rode o script de inicializacao/semente sempre que quiser garantir as tabelas/usuarios/camadas:
+   ```bash
+   python -m app.db_init
+   ```
+   O script executa `Base.metadata.create_all`, cria/atualiza o usuario `admin@demo.dev` (senha `demo123`) e insere as tres camadas de exemplo (`redes_esgoto`, `pocos_bombeamento`, `bairros`) apenas se ainda nao existirem. Depois disso o login via `/api/v1/login` funcionara usando:
+   ```
+   email: admin@demo.dev
+   senha: demo123
+   ```
 
 ## Prisma (migracoes e seed)
 Os comandos do Prisma garantem que o schema do Postgres esteja atualizado e que os dados base sejam criados. Rode uma vez após clonar ou sempre que subir o serviço:

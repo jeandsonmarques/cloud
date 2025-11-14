@@ -12,9 +12,9 @@ def _normalize_db_url(url: str) -> str:
 
 
 def _get_database_url() -> str:
-    raw = os.environ.get("DATABASE_URL", "")
+    raw = os.environ.get("DATABASE_URL") or os.environ.get("URL_DO_BANCO_DE_DADOS", "")
     if not raw:
-        raise RuntimeError("DATABASE_URL not set")
+        raise RuntimeError("DATABASE_URL or URL_DO_BANCO_DE_DADOS not set")
     return _normalize_db_url(raw)
 
 
