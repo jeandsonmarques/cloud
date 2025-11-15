@@ -120,6 +120,7 @@ class IntegrationConnectionRegistry(QObject):
         sanitized.setdefault("user", "")
         sanitized.setdefault("password", "")
         sanitized.setdefault("schema", "")
+        sanitized.setdefault("cloud_default_user", "")
         if not sanitized.get("fingerprint"):
             sanitized["fingerprint"] = _fingerprint(sanitized)
         return sanitized
@@ -244,7 +245,13 @@ class PowerBIRootItem(QgsDataCollectionItem):
         actions: List[QAction] = []
 
         cloud_action = QAction("Configurar PowerBI Cloud...", widget)
-        cloud_action.triggered.connect(lambda: open_cloud_dialog(widget))
+
+        def _open_cloud_dialog():
+            from .cloud_dialogs import open_cloud_dialog  # Import tardio evita ciclo
+
+            open_cloud_dialog(widget)
+
+        cloud_action.triggered.connect(_open_cloud_dialog)
         actions.append(cloud_action)
 
         pg_action = QAction("Nova conexao PostgreSQL...", widget)

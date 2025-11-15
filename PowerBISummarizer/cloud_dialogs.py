@@ -6,6 +6,7 @@ from qgis.PyQt.QtCore import QDateTime, Qt
 from qgis.PyQt.QtWidgets import (
     QCheckBox,
     QDialogButtonBox,
+    QFormLayout,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -17,8 +18,12 @@ from qgis.PyQt.QtWidgets import (
     QWidget,
 )
 
+from .browser_integration import connection_registry
 from .cloud_session import cloud_session
 from .slim_dialogs import SlimDialogBase
+
+
+ADMIN_EMAIL = "admin@demo.dev"
 
 
 class PowerBICloudDialog(SlimDialogBase):
@@ -151,6 +156,39 @@ class PowerBICloudDialog(SlimDialogBase):
 
         self.tabs.addTab(config_tab, "Configuracoes Cloud")
 
+        # Aba Admin para o cadastro de usuarios Cloud
+        admin_tab = QWidget(self.tabs)
+        admin_layout = QVBoxLayout(admin_tab)
+        admin_layout.setContentsMargins(12, 12, 12, 12)
+        admin_layout.setSpacing(12)
+
+        admin_info = QLabel(
+            "Apenas o usuario administrador pode criar contas Cloud para outras pessoas.", admin_tab
+        )
+        admin_info.setWordWrap(True)
+        admin_layout.addWidget(admin_info)
+
+        admin_form = QFormLayout()
+        admin_form.setLabelAlignment(Qt.AlignLeft)
+        self.adminEmailLineEdit = QLineEdit(admin_tab)
+        self.adminEmailLineEdit.setPlaceholderText("email do novo usuario (login)")
+        admin_form.addRow("E-mail do novo usuario", self.adminEmailLineEdit)
+
+        self.adminPasswordLineEdit = QLineEdit(admin_tab)
+        self.adminPasswordLineEdit.setEchoMode(QLineEdit.Password)
+        self.adminPasswordLineEdit.setPlaceholderText("senha inicial")
+        admin_form.addRow("Senha", self.adminPasswordLineEdit)
+
+        admin_layout.addLayout(admin_form)
+
+        self.createUserButton = QPushButton("Criar usuario Cloud", admin_tab)
+        self.createUserButton.setMinimumHeight(40)
+        admin_layout.addWidget(self.createUserButton)
+        admin_layout.addStretch(1)
+
+        self.admin_tab_index = self.tabs.addTab(admin_tab, "Admin")
+        self._update_admin_tab_visibility()
+
         button_box = QDialogButtonBox(QDialogButtonBox.Close, self)
         button_box.rejected.connect(self.reject)
         layout.addWidget(button_box)
@@ -163,6 +201,7 @@ class PowerBICloudDialog(SlimDialogBase):
         self.browser_btn.clicked.connect(self._open_browser_hint)
         self.save_config_btn.clicked.connect(self._save_config)
         self.test_real_btn.clicked.connect(self._handle_real_access_attempt)
+        self.createUserButton.clicked.connect(self.on_create_cloud_user_clicked)
         cloud_session.sessionChanged.connect(lambda *_: self._update_session_ui())
         cloud_session.configChanged.connect(lambda *_: self._update_config_ui())
         cloud_session.layersChanged.connect(lambda *_: self._on_layers_changed())
@@ -192,6 +231,8 @@ class PowerBICloudDialog(SlimDialogBase):
                 "PowerBI Cloud",
                 message,
             )
+            # Após login bem-sucedido, atualizamos o e-mail padrão vinculado à conexão ativa.
+            self._persist_cloud_user_from_login(username)
         except ValueError as exc:
             QMessageBox.warning(self, "PowerBI Cloud", str(exc))
         except Exception as exc:  # pragma: no cover - runtime safeguard
@@ -241,6 +282,76 @@ class PowerBICloudDialog(SlimDialogBase):
             "PowerBI Cloud",
             "Endpoints reais serao conectados assim que a infraestrutura estiver publicada.",
         )
+
+    # ------------------------------------------------------------------ Admin actions
+    def on_create_cloud_user_clicked(self):
+        """Slot acionado a partir do botao da aba Admin."""
+        current_user = (cloud_session.session().get("username") or "").strip()
+        if current_user.lower() != ADMIN_EMAIL:
+            QMessageBox.warning(
+                self,
+                "Permissao negada",
+                "Apenas o usuario admin@demo.dev pode criar novos usuarios Cloud.",
+            )
+            return
+
+        email = self.adminEmailLineEdit.text().strip()
+        password = self.adminPasswordLineEdit.text().strip()
+        if not email or not password:
+            QMessageBox.warning(
+                self,
+                "Dados invalidos",
+                "Informe o e-mail e a senha do novo usuario.",
+            )
+            return
+
+        if not cloud_session.is_authenticated() or not cloud_session.session().get("token"):
+            QMessageBox.warning(
+                self,
+                "Sessao invalida",
+                "Voce precisa estar logado como admin@demo.dev para criar usuarios.",
+            )
+            return
+
+        try:
+            status_code, payload = cloud_session.create_cloud_user(email=email, password=password)
+        except RuntimeError:
+            QMessageBox.critical(
+                self,
+                "Erro de conexao",
+                "Nao foi possivel comunicar com a API Cloud para criar o usuario. Verifique a conexao e tente novamente.",
+            )
+            return
+
+        detail = ""
+        if isinstance(payload, dict):
+            detail = payload.get("detail") or payload.get("message") or ""
+
+        if status_code in (200, 201):
+            QMessageBox.information(
+                self,
+                "Usuario criado",
+                f"Usuario Cloud {email} criado com sucesso.",
+            )
+            self.adminEmailLineEdit.clear()
+            self.adminPasswordLineEdit.clear()
+            return
+
+        if status_code in (400, 409):
+            message = detail or "Servidor recusou a criacao do usuario Cloud."
+            QMessageBox.warning(self, "Erro ao criar usuario", message)
+            return
+
+        if status_code in (401, 403):
+            QMessageBox.warning(
+                self,
+                "Sem permissao",
+                "Sessao expirada ou sem permissao. Faca login novamente como admin@demo.dev.",
+            )
+            return
+
+        fallback = detail or "Falha inesperada ao criar o usuario Cloud."
+        QMessageBox.warning(self, "Erro ao criar usuario", fallback)
 
     # ------------------------------------------------------------------ Helpers
     def _set_status_badge(self, level: str, text: str):
@@ -294,6 +405,10 @@ class PowerBICloudDialog(SlimDialogBase):
             session_details.append("Status: aguardando login.")
         self.session_detail.setText("\n".join(session_details))
         self.warning_label.setVisible(not cloud_session.hosting_ready())
+        if not is_auth:
+            # Carregamos o e-mail padrão salvo por conexão para sugerir o login.
+            self._prefill_user_from_connection()
+        self._update_admin_tab_visibility()
 
     def _update_config_ui(self):
         config = cloud_session.config()
@@ -306,6 +421,59 @@ class PowerBICloudDialog(SlimDialogBase):
     def _on_layers_changed(self):
         stamp = QDateTime.currentDateTime().toString("dd/MM HH:mm")
         self.last_sync_label.setText(stamp)
+
+    def _current_connection_default_user(self) -> str:
+        fingerprint = cloud_session.active_connection_fingerprint()
+        if not fingerprint:
+            return ""
+        for conn in connection_registry.saved_connections():
+            if conn.get("fingerprint") == fingerprint:
+                return conn.get("cloud_default_user", "") or ""
+        return ""
+
+    def _prefill_user_from_connection(self):
+        """Carrega o login padrão salvo para a conexão ativa e preenche o campo."""
+        default_user = self._current_connection_default_user()
+        if default_user:
+            self.user_edit.setText(default_user)
+
+    def _persist_cloud_user_from_login(self, email: str):
+        """Atualiza a conexão ativa com o login usado no último acesso Cloud."""
+        fingerprint = cloud_session.active_connection_fingerprint()
+        if not fingerprint or not email:
+            return
+        saved = connection_registry.saved_connections()
+        updated = False
+        for conn in saved:
+            if conn.get("fingerprint") == fingerprint:
+                if conn.get("cloud_default_user") == email:
+                    updated = False
+                    break
+                conn["cloud_default_user"] = email
+                updated = True
+                break
+        if updated:
+            # Persistimos o login padrão no mesmo storage de conexões usados pelo QSettings.
+            connection_registry.replace_saved_connections(saved, persist=True)
+
+    def _is_admin_user(self) -> bool:
+        username = (cloud_session.session().get("username") or "").strip().lower()
+        return cloud_session.is_authenticated() and username == ADMIN_EMAIL
+
+    def _update_admin_tab_visibility(self):
+        # Aba Admin so fica visivel quando o admin estiver autenticado.
+        if not hasattr(self, "admin_tab_index"):
+            return
+        is_admin = self._is_admin_user()
+        if hasattr(self.tabs, "setTabVisible"):
+            self.tabs.setTabVisible(self.admin_tab_index, is_admin)
+        else:
+            self.tabs.setTabEnabled(self.admin_tab_index, is_admin)
+            admin_widget = self.tabs.widget(self.admin_tab_index)
+            if admin_widget is not None:
+                admin_widget.setVisible(is_admin)
+        if not is_admin and self.tabs.currentIndex() == self.admin_tab_index:
+            self.tabs.setCurrentIndex(0)
 
 
 def open_cloud_dialog(parent: Optional[QWidget] = None) -> PowerBICloudDialog:

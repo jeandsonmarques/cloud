@@ -24,6 +24,7 @@ from qgis.PyQt.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFileDialog,
+    QFormLayout,
     QFrame,
     QGridLayout,
     QGraphicsDropShadowEffect,
@@ -790,31 +791,90 @@ class IntegrationPanel(QWidget):
             item = QListWidgetItem(label)
             item.setData(Qt.UserRole, conn)
             list_widget.addItem(item)
+        if list_widget.count() > 0:
+            list_widget.setCurrentRow(0)
         layout.addWidget(list_widget, 1)
+
+        cloud_hint = QLabel(
+            "Defina o campo abaixo para preencher automaticamente o login Cloud relativo a cada conexão.",
+            dialog,
+        )
+        cloud_hint.setWordWrap(True)
+        layout.addWidget(cloud_hint)
+
+        cloud_form = QFormLayout()
+        cloud_form.setLabelAlignment(Qt.AlignLeft)
+        cloud_user_edit = QLineEdit(dialog)
+        cloud_user_edit.setPlaceholderText("usuario@empresa.com")
+        cloud_form.addRow("Usuário Cloud padrão", cloud_user_edit)
+        layout.addLayout(cloud_form)
 
         button_box = QDialogButtonBox(QDialogButtonBox.Close, dialog)
         remove_btn = button_box.addButton("Remover", QDialogButtonBox.ActionRole)
+        save_btn = button_box.addButton("Salvar usuário Cloud", QDialogButtonBox.ActionRole)
         remove_btn.setEnabled(False)
+        save_btn.setEnabled(False)
+        cloud_user_edit.setEnabled(False)
         layout.addWidget(button_box)
 
-        def update_remove_state():
-            remove_btn.setEnabled(list_widget.currentItem() is not None)
-
-        def remove_selected():
+        def _current_connection():
             item = list_widget.currentItem()
             if not item:
-                return
-            conn = item.data(Qt.UserRole)
-            self._saved_connections = [c for c in self._saved_connections if c != conn]
-            row = list_widget.row(item)
-            list_widget.takeItem(row)
-            self._save_connections()
-            update_remove_state()
+                return None
+            return item.data(Qt.UserRole)
 
-        list_widget.currentItemChanged.connect(lambda *_: update_remove_state())
+        def update_state_from_selection():
+            conn = _current_connection()
+            has_selection = conn is not None
+            remove_btn.setEnabled(has_selection)
+            save_btn.setEnabled(has_selection)
+            cloud_user_edit.setEnabled(has_selection)
+            if has_selection:
+                # Guardamos o usuário Cloud padrão junto com a conexão no QSettings.
+                cloud_user_edit.setText(conn.get("cloud_default_user", ""))
+                fingerprint = conn.get("fingerprint", "")
+                if fingerprint:
+                    self.cloud_session.set_active_connection_fingerprint(fingerprint)
+            else:
+                cloud_user_edit.clear()
+                self.cloud_session.set_active_connection_fingerprint(None)
+
+        def remove_selected():
+            conn = _current_connection()
+            if not conn:
+                return
+            self._saved_connections = [c for c in self._saved_connections if c != conn]
+            row = list_widget.currentRow()
+            item = list_widget.takeItem(row)
+            del item
+            self._save_connections()
+            update_state_from_selection()
+
+        def save_cloud_user():
+            conn = _current_connection()
+            if not conn:
+                return
+            email = cloud_user_edit.text().strip()
+            # Persistimos o usuário Cloud padrão no registro de conexões/QSettings.
+            conn["cloud_default_user"] = email
+            fingerprint = conn.get("fingerprint")
+            for idx, existing in enumerate(self._saved_connections):
+                if existing is conn or existing.get("fingerprint") == fingerprint:
+                    self._saved_connections[idx]["cloud_default_user"] = email
+                    break
+            self._save_connections()
+            QMessageBox.information(
+                dialog,
+                "PowerBI Cloud",
+                "Usuário Cloud padrão atualizado para esta conexão.",
+            )
+
+        list_widget.currentItemChanged.connect(lambda *_: update_state_from_selection())
+        save_btn.clicked.connect(save_cloud_user)
         remove_btn.clicked.connect(remove_selected)
         button_box.rejected.connect(dialog.reject)
 
+        update_state_from_selection()
         dialog.exec_()
 
     # ------------------------------------------------------------------ Connectors
@@ -861,6 +921,13 @@ class IntegrationPanel(QWidget):
                 self._saved_connections.insert(0, connection_meta)
                 self._save_connections()
                 self._mirror_connection_in_browser(connection_meta)
+            fingerprint = (
+                (connection_meta or {}).get("fingerprint")
+                or (session_connection or {}).get("fingerprint")
+            )
+            if fingerprint:
+                # Mantemos qual conexão foi usada por último para preencher o login Cloud.
+                self.cloud_session.set_active_connection_fingerprint(fingerprint)
 
     def _handle_clipboard(self):
         dialog = ClipboardImportDialog(self)
@@ -1622,6 +1689,12 @@ class DatabaseImportDialog(SlimDialogBase):
         }
         payload["name"] = f"{payload.get('database')} ({payload.get('driver')})"
         payload["fingerprint"] = f"{payload.get('driver')}::{payload.get('host')}::{payload.get('database')}::{payload.get('user')}"
+        for saved in self.saved_connections:
+            if saved.get("fingerprint") == payload["fingerprint"]:
+                payload["cloud_default_user"] = saved.get("cloud_default_user", "")
+                break
+        else:
+            payload["cloud_default_user"] = params.get("cloud_default_user", "")
         return payload
 
     def _test_connection(self):

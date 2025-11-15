@@ -5,7 +5,7 @@ import json
 import os
 import uuid
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from qgis.PyQt.QtCore import QObject, QDateTime, QSettings, Qt, pyqtSignal
 
@@ -23,6 +23,7 @@ except ImportError:  # pragma: no cover - fallback when requests isn't available
 _HERE = os.path.dirname(__file__)
 _CLOUD_SAMPLES_DIR = os.path.join(_HERE, "resources", "cloud_samples")
 REQUEST_TIMEOUT = 15
+ACTIVE_CONNECTION_KEY = "PowerBISummarizer/cloud/active_connection"
 
 
 @dataclass
@@ -265,6 +266,25 @@ class PowerBICloudSession(QObject):
         prefix = "Bearer" if token_type == "bearer" else token_type.capitalize()
         return {"Authorization": f"{prefix} {token}"}
 
+    def create_cloud_user(self, *, email: str, password: str) -> Tuple[int, Dict]:
+        """Dispara POST /api/v1/admin/create-user reaproveitando a configuracao atual."""
+        if requests is None:
+            raise RuntimeError("O modulo 'requests' nao esta disponivel no ambiente do QGIS.")
+        # Chamada direta para /api/v1/admin/create-user usando o token atual.
+        url = self._build_url("/api/v1/admin/create-user")
+        headers = dict(self._auth_headers())
+        headers.setdefault("Content-Type", "application/json")
+        payload = {"email": email, "password": password}
+        try:
+            response = requests.post(url, json=payload, headers=headers, timeout=REQUEST_TIMEOUT)
+        except RequestException as exc:
+            raise RuntimeError(f"Falha ao conectar ao PowerBI Cloud ({url}): {exc}") from exc
+        try:
+            data = response.json()
+        except ValueError:
+            data = {}
+        return response.status_code, data
+
     def _should_use_remote_layers(self) -> bool:
         if not self.hosting_ready():
             return False
@@ -416,6 +436,18 @@ class PowerBICloudSession(QObject):
             text = f"Modo demo ativo ({username})"
             level = "sync"
         return {"text": text, "level": level, "issued": issued}
+
+    def active_connection_fingerprint(self) -> str:
+        """Retorna o fingerprint da conexao marcada como atual para o Cloud."""
+        value = self._settings.value(ACTIVE_CONNECTION_KEY, "")
+        return str(value) if value else ""
+
+    def set_active_connection_fingerprint(self, fingerprint: Optional[str]):
+        """Atualiza a conexao atual usada para preencher o login padrão."""
+        if fingerprint:
+            self._settings.setValue(ACTIVE_CONNECTION_KEY, fingerprint)
+        else:
+            self._settings.remove(ACTIVE_CONNECTION_KEY)
 
 
 cloud_session = PowerBICloudSession()
