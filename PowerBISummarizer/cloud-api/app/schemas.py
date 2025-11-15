@@ -1,6 +1,6 @@
 from datetime import datetime
 import re
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
 
 _EMAIL_REGEX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
@@ -19,6 +19,11 @@ class LoginRequest(BaseModel):
     @classmethod
     def _login_email(cls, value: str) -> str:
         return _validate_email(value)
+
+
+class CreateUserRequest(BaseModel):
+    email: EmailStr
+    password: str
 
 
 class TokenResponse(BaseModel):

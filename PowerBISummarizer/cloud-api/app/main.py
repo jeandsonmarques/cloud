@@ -1,4 +1,5 @@
 import os
+from datetime import datetime, timezone
 from typing import List
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, status
@@ -11,6 +12,7 @@ from .auth import (
     authenticate_user,
     create_access_token,
     get_current_user,
+    hash_password,
 )
 from .db import get_db
 from .models import Layer, User
@@ -67,6 +69,40 @@ def list_layers(
 ):
     layers = db.query(Layer).order_by(Layer.name.asc()).all()
     return layers
+
+
+@router.post("/admin/create-user", tags=["admin"])
+def admin_create_user(
+    payload: schemas.CreateUserRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if current_user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required"
+        )
+
+    existing_user = db.query(User).filter(User.email == payload.email).first()
+    if existing_user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered"
+        )
+
+    new_user = User(
+        email=payload.email,
+        password_hash=hash_password(payload.password),
+        role="user",
+        created_at=datetime.now(timezone.utc),
+    )
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+
+    return {
+        "status": "ok",
+        "message": "Usuario criado",
+        "email": new_user.email,
+    }
 
 
 app.include_router(router)
