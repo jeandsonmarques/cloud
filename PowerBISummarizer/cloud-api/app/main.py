@@ -71,13 +71,18 @@ def list_layers(
     return layers
 
 
-@router.post("/admin/create-user", tags=["admin"])
+@router.post(
+    "/admin/create-user",
+    tags=["admin"],
+    response_model=schemas.CreatedUserResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 def admin_create_user(
     payload: schemas.CreateUserRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    if current_user.role != "admin":
+    if not current_user.is_admin:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required"
         )
@@ -85,24 +90,25 @@ def admin_create_user(
     existing_user = db.query(User).filter(User.email == payload.email).first()
     if existing_user:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered"
+            status_code=status.HTTP_400_BAD_REQUEST, detail="E-mail já cadastrado"
         )
 
     new_user = User(
         email=payload.email,
         password_hash=hash_password(payload.password),
         role="user",
+        is_admin=False,
         created_at=datetime.now(timezone.utc),
     )
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
 
-    return {
-        "status": "ok",
-        "message": "Usuario criado",
-        "email": new_user.email,
-    }
+    return schemas.CreatedUserResponse(
+        id=new_user.id,
+        email=new_user.email,
+        is_admin=bool(new_user.is_admin),
+    )
 
 
 app.include_router(router)

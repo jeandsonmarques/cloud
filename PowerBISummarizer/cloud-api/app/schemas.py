@@ -38,12 +38,19 @@ class UserOut(BaseModel):
     id: int
     email: str
     role: str
+    is_admin: bool
     created_at: datetime
 
     @field_validator("email")
     @classmethod
     def _user_email(cls, value: str) -> str:
         return _validate_email(value)
+
+
+class CreatedUserResponse(BaseModel):
+    id: int
+    email: EmailStr
+    is_admin: bool = False
 
 
 class LayerOut(BaseModel):

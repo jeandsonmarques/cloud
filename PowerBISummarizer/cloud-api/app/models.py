@@ -13,6 +13,14 @@ class User(Base):
     role = Column(String(50), nullable=False, default="user")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
+    @property
+    def is_admin(self) -> bool:
+        return (self.role or "").lower() == "admin"
+
+    @is_admin.setter
+    def is_admin(self, value: bool) -> None:
+        self.role = "admin" if value else "user"
+
 
 class Layer(Base):
     __tablename__ = "layers"
