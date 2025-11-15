@@ -18,7 +18,6 @@ from qgis.PyQt.QtWidgets import (
     QWidget,
 )
 
-from .browser_integration import connection_registry
 from .cloud_session import cloud_session
 from .slim_dialogs import SlimDialogBase
 
@@ -422,11 +421,22 @@ class PowerBICloudDialog(SlimDialogBase):
         stamp = QDateTime.currentDateTime().toString("dd/MM HH:mm")
         self.last_sync_label.setText(stamp)
 
+    def _get_connection_registry(self):
+        """Import lazy evita ciclo com browser_integration."""
+        try:
+            from .browser_integration import connection_registry
+        except ImportError:
+            return None
+        return connection_registry
+
     def _current_connection_default_user(self) -> str:
+        registry = self._get_connection_registry()
+        if registry is None:
+            return ""
         fingerprint = cloud_session.active_connection_fingerprint()
         if not fingerprint:
             return ""
-        for conn in connection_registry.saved_connections():
+        for conn in registry.saved_connections():
             if conn.get("fingerprint") == fingerprint:
                 return conn.get("cloud_default_user", "") or ""
         return ""
@@ -442,7 +452,10 @@ class PowerBICloudDialog(SlimDialogBase):
         fingerprint = cloud_session.active_connection_fingerprint()
         if not fingerprint or not email:
             return
-        saved = connection_registry.saved_connections()
+        registry = self._get_connection_registry()
+        if registry is None:
+            return
+        saved = registry.saved_connections()
         updated = False
         for conn in saved:
             if conn.get("fingerprint") == fingerprint:
@@ -454,7 +467,7 @@ class PowerBICloudDialog(SlimDialogBase):
                 break
         if updated:
             # Persistimos o login padrão no mesmo storage de conexões usados pelo QSettings.
-            connection_registry.replace_saved_connections(saved, persist=True)
+            registry.replace_saved_connections(saved, persist=True)
 
     def _is_admin_user(self) -> bool:
         username = (cloud_session.session().get("username") or "").strip().lower()
