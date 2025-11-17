@@ -38,6 +38,7 @@ app.add_middleware(
 )
 
 router = APIRouter(prefix=API_BASEPATH)
+admin_router = APIRouter(prefix="/admin", tags=["admin"])
 
 
 @router.get("/health", tags=["health"])  # Simple readiness probe
@@ -71,13 +72,12 @@ def list_layers(
     return layers
 
 
-@router.post(
-    "/admin/create-user",
-    tags=["admin"],
+@admin_router.post(
+    "/create-user",
     response_model=schemas.CreatedUserResponse,
     status_code=status.HTTP_201_CREATED,
 )
-def admin_create_user(
+def create_user(
     payload: schemas.CreateUserRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -90,14 +90,13 @@ def admin_create_user(
     existing_user = db.query(User).filter(User.email == payload.email).first()
     if existing_user:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="E-mail já cadastrado"
+            status_code=status.HTTP_400_BAD_REQUEST, detail="E-mail j\u00e1 cadastrado"
         )
 
     new_user = User(
         email=payload.email,
         password_hash=hash_password(payload.password),
         role="user",
-        is_admin=False,
         created_at=datetime.now(timezone.utc),
     )
     db.add(new_user)
@@ -112,3 +111,4 @@ def admin_create_user(
 
 
 app.include_router(router)
+app.include_router(admin_router, prefix=API_BASEPATH)
