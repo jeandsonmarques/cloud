@@ -1,21 +1,11 @@
 import os
-from datetime import datetime, timezone
 from typing import List
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
-from . import schemas
-from .auth import (
-    JWT_EXPIRES,
-    authenticate_user,
-    create_access_token,
-    get_current_user,
-    hash_password,
-)
-from .db import get_db
-from .models import Layer, User
+from . import auth, db, models, schemas
 
 API_BASEPATH = os.getenv("API_BASEPATH", "/api/v1")
 ALLOWED_ORIGINS = os.getenv("CORS_ALLOW_ORIGINS", "*")
@@ -37,38 +27,38 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-router = APIRouter(prefix=API_BASEPATH)
+api_router = APIRouter()
 admin_router = APIRouter(prefix="/admin", tags=["admin"])
 
 
-@router.get("/health", tags=["health"])  # Simple readiness probe
+@api_router.get("/health", tags=["health"])  # Simple readiness probe
 def readiness_check():
     return {"status": "ok"}
 
 
-@router.post("/login", response_model=schemas.TokenResponse)
-def login(payload: schemas.LoginRequest, db: Session = Depends(get_db)):
-    user = authenticate_user(db, payload.email, payload.password)
+@api_router.post("/login", response_model=schemas.TokenResponse)
+def login(payload: schemas.LoginRequest, db_session: Session = Depends(db.get_db)):
+    user = auth.authenticate_user(db_session, payload.email, payload.password)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password",
         )
-    token = create_access_token(subject=str(user.id))
-    return schemas.TokenResponse(access_token=token, expires_in=JWT_EXPIRES)
+    token = auth.create_access_token(subject=str(user.id))
+    return schemas.TokenResponse(access_token=token, expires_in=auth.JWT_EXPIRES)
 
 
-@router.get("/me", response_model=schemas.UserOut)
-def get_me(current_user: User = Depends(get_current_user)):
+@api_router.get("/me", response_model=schemas.UserOut)
+def get_me(current_user: models.User = Depends(auth.get_current_user)):
     return current_user
 
 
-@router.get("/layers", response_model=List[schemas.LayerOut])
+@api_router.get("/layers", response_model=List[schemas.LayerOut])
 def list_layers(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user),
+    db_session: Session = Depends(db.get_db),
 ):
-    layers = db.query(Layer).order_by(Layer.name.asc()).all()
+    layers = db_session.query(models.Layer).order_by(models.Layer.name.asc()).all()
     return layers
 
 
@@ -79,36 +69,40 @@ def list_layers(
 )
 def create_user(
     payload: schemas.CreateUserRequest,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user),
+    db_session: Session = Depends(db.get_db),
 ):
     if not current_user.is_admin:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required"
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Apenas admin pode criar usu\u00e1rios.",
         )
 
-    existing_user = db.query(User).filter(User.email == payload.email).first()
-    if existing_user:
+    existing = (
+        db_session.query(models.User).filter(models.User.email == payload.email).first()
+    )
+    if existing:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="E-mail j\u00e1 cadastrado"
         )
 
-    new_user = User(
+    hashed_password = auth.get_password_hash(payload.password)
+
+    user = models.User(
         email=payload.email,
-        password_hash=hash_password(payload.password),
-        role="user",
-        created_at=datetime.now(timezone.utc),
+        password_hash=hashed_password,
+        is_admin=False,
     )
-    db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
 
     return schemas.CreatedUserResponse(
-        id=new_user.id,
-        email=new_user.email,
-        is_admin=bool(new_user.is_admin),
+        id=user.id,
+        email=user.email,
+        is_admin=bool(user.is_admin),
     )
 
 
-app.include_router(router)
+app.include_router(api_router, prefix=API_BASEPATH)
 app.include_router(admin_router, prefix=API_BASEPATH)

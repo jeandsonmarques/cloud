@@ -24,6 +24,11 @@ def hash_password(password: str) -> str:
     return pwd_context.hash(password)
 
 
+def get_password_hash(password: str) -> str:
+    # convenience alias used by admin create-user endpoint
+    return hash_password(password)
+
+
 def verify_password(plain_password: str, password_hash: str) -> bool:
     return pwd_context.verify(plain_password, password_hash)
 
