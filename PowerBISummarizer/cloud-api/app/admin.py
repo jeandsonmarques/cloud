@@ -26,7 +26,9 @@ def create_user(
 
     existing = db.query(models.User).filter(models.User.email == payload.email).first()
     if existing:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="E-mail ja cadastrado")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="E-mail ja cadastrado"
+        )
 
     hashed_pw = get_password_hash(payload.password)
 
