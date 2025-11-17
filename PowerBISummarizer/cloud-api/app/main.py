@@ -65,6 +65,5 @@ def list_layers(
 app.include_router(api_router, prefix=API_BASEPATH)
 app.include_router(
     admin_router,
-    prefix=f"{API_BASEPATH}/admin",
-    tags=["admin"],
+    prefix=API_BASEPATH,
 )

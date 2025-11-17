@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from . import auth, db, models, schemas
 
-admin_router = APIRouter()
+admin_router = APIRouter(prefix="/admin", tags=["admin"])
 
 
 @admin_router.post(
