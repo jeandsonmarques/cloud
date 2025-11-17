@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
+from app.admin import admin_router
 from . import auth, db, models, schemas
 
 API_BASEPATH = os.getenv("API_BASEPATH", "/api/v1")
@@ -28,7 +29,6 @@ app.add_middleware(
 )
 
 api_router = APIRouter()
-admin_router = APIRouter(prefix="/admin", tags=["admin"])
 
 
 @api_router.get("/health", tags=["health"])  # Simple readiness probe
@@ -62,47 +62,9 @@ def list_layers(
     return layers
 
 
-@admin_router.post(
-    "/create-user",
-    response_model=schemas.CreatedUserResponse,
-    status_code=status.HTTP_201_CREATED,
-)
-def create_user(
-    payload: schemas.CreateUserRequest,
-    current_user: models.User = Depends(auth.get_current_user),
-    db_session: Session = Depends(db.get_db),
-):
-    if not current_user.is_admin:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Apenas admin pode criar usu\u00e1rios.",
-        )
-
-    existing = (
-        db_session.query(models.User).filter(models.User.email == payload.email).first()
-    )
-    if existing:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="E-mail j\u00e1 cadastrado"
-        )
-
-    hashed_password = auth.get_password_hash(payload.password)
-
-    user = models.User(
-        email=payload.email,
-        password_hash=hashed_password,
-        is_admin=False,
-    )
-    db_session.add(user)
-    db_session.commit()
-    db_session.refresh(user)
-
-    return schemas.CreatedUserResponse(
-        id=user.id,
-        email=user.email,
-        is_admin=bool(user.is_admin),
-    )
-
-
 app.include_router(api_router, prefix=API_BASEPATH)
-app.include_router(admin_router, prefix=API_BASEPATH)
+app.include_router(
+    admin_router,
+    prefix=f"{API_BASEPATH}/admin",
+    tags=["admin"],
+)
