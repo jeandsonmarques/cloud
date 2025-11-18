@@ -125,6 +125,20 @@ Retorno de `/layers`:
 ]
 ```
 
+## Atualizar banco existente (Railway)
+Caso o Postgres ja exista e a tabela `layers` ainda esteja no schema antigo (sem `provider/description/uri/epsg/created_by_user_id` ou com unique apenas em `name`), aplique a migracao incremental `app/migrate_layers.sql`. Ela e idempotente e pode ser rodada mais de uma vez.
+
+1. Pegue a `DATABASE_URL` do Postgres no Railway (Settings -> Variables).
+2. Execute o script contra esse banco:
+   ```bash
+   cd cloud-api
+   psql "$DATABASE_URL" -f app/migrate_layers.sql
+   ```
+   Se preferir GUI, copie o conteudo do arquivo e rode conectado ao Postgres do Railway.
+3. Depois de aplicar a migracao, faca um redeploy do servico no Railway para a API usar o schema atualizado.
+
+O script adiciona as colunas novas, garante `provider` como NOT NULL com default `postgis`, remove a unique antiga so em `name` (ignorando se ela nao existir) e cria a unique `uq_layers_name_provider_user` em `(name, provider, created_by_user_id)`.
+
 ## Proximos passos sugeridos
 - Ajustar politicas de CORS (`CORS_ALLOW_ORIGINS`).
 - Adicionar mais camadas/tabelas conforme necessidade do Power BI.
