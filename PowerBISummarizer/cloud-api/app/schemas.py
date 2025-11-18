@@ -60,6 +60,7 @@ class LayerOut(BaseModel):
     name: str
     provider: str
     uri: str | None = None
+    description: str | None = None
     epsg: int | None = None
     schema: str | None = None
     srid: int | None = None

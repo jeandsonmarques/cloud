@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -25,11 +25,20 @@ class User(Base):
 
 class Layer(Base):
     __tablename__ = "layers"
+    __table_args__ = (
+        UniqueConstraint(
+            "name",
+            "provider",
+            "created_by_user_id",
+            name="uq_layers_name_provider_user",
+        ),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(255), nullable=False, unique=True)
+    name = Column(String(255), nullable=False)
     provider = Column(String(50), nullable=False, default="postgis")
     uri = Column(String(1024), nullable=True)
+    description = Column(Text, nullable=True)
     schema = Column(String(255), nullable=True, default="public")
     srid = Column(Integer, nullable=True)
     epsg = Column(Integer, nullable=True)

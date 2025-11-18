@@ -84,6 +84,7 @@ def _cleanup_file(path: Path) -> None:
 async def upload_layer_gpkg(
     file: UploadFile = File(...),
     name: str | None = Form(None),
+    description: str | None = Form(None),
     epsg: int | None = Form(None),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
@@ -104,11 +105,28 @@ async def upload_layer_gpkg(
     now = datetime.utcnow()
     dated_path = Path(str(now.year), f"{now.month:02}", f"{now.day:02}")
     generated_filename = f"{uuid4().hex}_{safe_stem}.gpkg"
-    relative_uri = Path("gpkg") / dated_path / generated_filename
-    target_dir = UPLOAD_DIR / dated_path
+    # Evita duplicar subpasta gpkg se UPLOAD_DIR ja termina com gpkg
+    relative_prefix = Path("" if UPLOAD_DIR.name.lower() == "gpkg" else "gpkg")
+    relative_uri = relative_prefix / dated_path / generated_filename
+    target_dir = UPLOAD_DIR / relative_prefix / dated_path
     target_path = target_dir / generated_filename
 
     target_dir.mkdir(parents=True, exist_ok=True)
+
+    existing = (
+        db.query(models.Layer)
+        .filter(
+            models.Layer.name == safe_display_name,
+            models.Layer.provider == "gpkg",
+            models.Layer.created_by_user_id == current_user.id,
+        )
+        .first()
+    )
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Ja existe uma camada com este nome para este usuario.",
+        )
 
     try:
         with target_path.open("wb") as out_file:
@@ -122,6 +140,7 @@ async def upload_layer_gpkg(
             name=safe_display_name,
             provider="gpkg",
             uri=str(relative_uri).replace("\\", "/"),
+            description=description,
             epsg=epsg,
             srid=epsg,
             schema=None,

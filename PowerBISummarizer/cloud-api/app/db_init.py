@@ -14,6 +14,7 @@ LAYER_SEEDS = [
     {
         "name": "redes_esgoto",
         "provider": "postgis",
+        "description": "Camada de rede de esgoto",
         "schema": "public",
         "srid": 31984,
         "epsg": 31984,
@@ -22,6 +23,7 @@ LAYER_SEEDS = [
     {
         "name": "pocos_bombeamento",
         "provider": "postgis",
+        "description": "Camada de pocos",
         "schema": "public",
         "srid": 31984,
         "epsg": 31984,
@@ -30,6 +32,7 @@ LAYER_SEEDS = [
     {
         "name": "bairros",
         "provider": "postgis",
+        "description": "Camada de bairros",
         "schema": "public",
         "srid": 31984,
         "epsg": 31984,
