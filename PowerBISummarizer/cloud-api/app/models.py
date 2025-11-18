@@ -1,4 +1,5 @@
-from sqlalchemy import Column, DateTime, Integer, String, Text
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
 from .db import Base
@@ -27,7 +28,13 @@ class Layer(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(255), nullable=False, unique=True)
-    schema = Column(String(255), nullable=False, default="public")
-    srid = Column(Integer, nullable=False)
-    geom_type = Column(String(50), nullable=False)
+    provider = Column(String(50), nullable=False, default="postgis")
+    uri = Column(String(1024), nullable=True)
+    schema = Column(String(255), nullable=True, default="public")
+    srid = Column(Integer, nullable=True)
+    epsg = Column(Integer, nullable=True)
+    geom_type = Column(String(50), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+
+    created_by = relationship("User", backref="layers")

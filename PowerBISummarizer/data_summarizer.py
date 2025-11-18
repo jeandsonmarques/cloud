@@ -2224,6 +2224,24 @@ class PowerBISummarizerDialog(QDialog):
                 "\n".join(summary_lines + [""] + detail_lines),
             )
 
+    def open_cloud_upload_tab(self):
+        """Open the Cloud dialog focusing the upload tab (admin only)."""
+        try:
+            from .cloud_dialogs import open_cloud_dialog
+            from .cloud_session import cloud_session
+
+            if not cloud_session.is_authenticated() or not cloud_session.is_admin():
+                QMessageBox.information(
+                    self,
+                    "PowerBI Cloud",
+                    "Somente administradores conectados podem enviar camadas para o Cloud.",
+                )
+                return
+            open_cloud_dialog(self, initial_tab="upload")
+        except Exception:
+            # Safe fallback: ignore failures to open the dialog
+            pass
+
     def _prompt_layers_export_directory(self):
         settings = QSettings()
         last_dir = settings.value("PowerBISummarizer/export/gpkgDir", "")

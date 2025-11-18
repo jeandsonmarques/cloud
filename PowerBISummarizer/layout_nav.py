@@ -10,6 +10,8 @@ from qgis.PyQt.QtWidgets import (
     QToolTip,
 )
 
+from .cloud_session import cloud_session
+
 
 class SidebarController:
     """Slim icon-only navigation for the Power BI Summarizer dialog."""
@@ -36,9 +38,15 @@ class SidebarController:
 
         self.buttons: Dict[str, QPushButton] = {}
         self.export_button: Optional[QPushButton] = None
+        self.upload_button: Optional[QPushButton] = None
         self.current_mode: Optional[str] = None
 
         self._build_sidebar()
+        try:
+            cloud_session.sessionChanged.connect(lambda *_: self._update_upload_button_state())
+        except Exception:
+            pass
+        self._update_upload_button_state()
         self._set_mode("resumo")
 
     def _build_sidebar(self):
@@ -84,6 +92,19 @@ class SidebarController:
         if self.host is not None:
             self.export_button.clicked.connect(self._trigger_export)
 
+        self.upload_button = QPushButton("")
+        self.upload_button.setCursor(Qt.PointingHandCursor)
+        self.upload_button.setToolTip("Enviar camadas para o PowerBI Cloud (apenas admin)")
+        self.upload_button.setFixedSize(40, 40)
+        self.upload_button.setIconSize(QSize(24, 24))
+        self.upload_button.setProperty("navIcon", "true")
+        upload_icon_path = os.path.join(icons_dir, "cloud.svg")
+        if os.path.exists(upload_icon_path):
+            self.upload_button.setIcon(QIcon(upload_icon_path))
+        layout.addWidget(self.upload_button, 0, Qt.AlignBottom)
+        if self.host is not None:
+            self.upload_button.clicked.connect(self._trigger_upload)
+
     def _trigger_export(self):
         host = self.host
         if host is None:
@@ -92,6 +113,26 @@ class SidebarController:
             host.export_all_vector_layers()
         except Exception:
             pass
+
+    def _trigger_upload(self):
+        host = self.host
+        if host is None:
+            return
+        try:
+            host.open_cloud_upload_tab()
+        except Exception:
+            pass
+
+    def _update_upload_button_state(self):
+        if self.upload_button is None:
+            return
+        is_admin = False
+        try:
+            is_admin = cloud_session.is_admin()
+        except Exception:
+            is_admin = False
+        self.upload_button.setEnabled(is_admin)
+        self.upload_button.setVisible(is_admin)
 
     def _handle_nav_click(self, mode: str):
         btn = self.buttons.get(mode)

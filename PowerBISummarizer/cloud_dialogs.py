@@ -1,10 +1,15 @@
 from __future__ import annotations
 
-from typing import Optional
+import os
+import shutil
+import tempfile
+from pathlib import Path
+from typing import List, Optional
 
 from qgis.PyQt.QtCore import QDateTime, Qt
 from qgis.PyQt.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialogButtonBox,
     QFormLayout,
     QGridLayout,
@@ -18,25 +23,29 @@ from qgis.PyQt.QtWidgets import (
     QWidget,
 )
 
+from qgis.core import QgsProject, QgsVectorFileWriter, QgsVectorLayer
+from qgis.utils import iface
+
 from .cloud_session import cloud_session
 from .slim_dialogs import SlimDialogBase
 
-
-ADMIN_EMAIL = "admin@demo.dev"
 
 
 class PowerBICloudDialog(SlimDialogBase):
     """Popup used both in the Integration tab and Browser shortcuts."""
 
-    def __init__(self, parent: Optional[QWidget] = None):
+    def __init__(self, parent: Optional[QWidget] = None, initial_tab: Optional[str] = None):
         super().__init__(parent, geometry_key="PowerBISummarizer/cloud/dialog")
         self.setWindowTitle("PowerBI Cloud (beta)")
         self.resize(640, 420)
+        self._upload_layers: List[QgsVectorLayer] = []
         self._build_ui()
         self._connect_signals()
         self._update_session_ui()
         self._update_config_ui()
         self._on_layers_changed()
+        self._refresh_upload_layers()
+        self._select_initial_tab(initial_tab)
 
     # ------------------------------------------------------------------ UI
     def _build_ui(self):
@@ -112,7 +121,7 @@ class PowerBICloudDialog(SlimDialogBase):
         self.warning_label.setProperty("role", "helper")
         session_layout.addWidget(self.warning_label, 5, 0, 1, 2)
 
-        self.tabs.addTab(session_tab, "Sessao")
+        self.session_tab_index = self.tabs.addTab(session_tab, "Sessao")
 
         # Config tab -----------------------------------------------------
         config_tab = QWidget(self.tabs)
@@ -153,7 +162,7 @@ class PowerBICloudDialog(SlimDialogBase):
         config_hint.setProperty("role", "helper")
         config_layout.addWidget(config_hint, 5, 0, 1, 2)
 
-        self.tabs.addTab(config_tab, "Configuracoes Cloud")
+        self.config_tab_index = self.tabs.addTab(config_tab, "Configuracoes Cloud")
 
         # Aba Admin para o cadastro de usuarios Cloud
         admin_tab = QWidget(self.tabs)
@@ -186,6 +195,48 @@ class PowerBICloudDialog(SlimDialogBase):
         admin_layout.addStretch(1)
 
         self.admin_tab_index = self.tabs.addTab(admin_tab, "Admin")
+
+        # Aba Upload Cloud (apenas admin)
+        upload_tab = QWidget(self.tabs)
+        upload_layout = QVBoxLayout(upload_tab)
+        upload_layout.setContentsMargins(12, 12, 12, 12)
+        upload_layout.setSpacing(10)
+
+        upload_form = QFormLayout()
+        upload_form.setLabelAlignment(Qt.AlignLeft)
+        self.upload_layer_combo = QComboBox(upload_tab)
+        upload_form.addRow("Camada do QGIS", self.upload_layer_combo)
+
+        self.upload_name_edit = QLineEdit(upload_tab)
+        self.upload_name_edit.setPlaceholderText("Nome da camada no Cloud")
+        upload_form.addRow("Nome no Cloud", self.upload_name_edit)
+
+        self.upload_desc_edit = QLineEdit(upload_tab)
+        self.upload_desc_edit.setPlaceholderText("Descricao curta (opcional)")
+        upload_form.addRow("Descricao (opcional)", self.upload_desc_edit)
+
+        upload_layout.addLayout(upload_form)
+
+        upload_hint = QLabel(
+            "Sera criado um arquivo GPKG temporario com a camada selecionada e enviado para o servidor. "
+            "Funcao disponivel apenas para administrador.",
+            upload_tab,
+        )
+        upload_hint.setWordWrap(True)
+        upload_hint.setProperty("role", "helper")
+        upload_layout.addWidget(upload_hint)
+
+        self.upload_button = QPushButton("Enviar camada para o Cloud (GPKG)", upload_tab)
+        self.upload_button.setMinimumHeight(40)
+        upload_layout.addWidget(self.upload_button)
+
+        self.upload_status_label = QLabel("", upload_tab)
+        self.upload_status_label.setWordWrap(True)
+        self.upload_status_label.setProperty("role", "helper")
+        upload_layout.addWidget(self.upload_status_label)
+        upload_layout.addStretch(1)
+
+        self.upload_tab_index = self.tabs.addTab(upload_tab, "Upload")
         self._update_admin_tab_visibility()
 
         button_box = QDialogButtonBox(QDialogButtonBox.Close, self)
@@ -201,6 +252,8 @@ class PowerBICloudDialog(SlimDialogBase):
         self.save_config_btn.clicked.connect(self._save_config)
         self.test_real_btn.clicked.connect(self._handle_real_access_attempt)
         self.createUserButton.clicked.connect(self.on_create_cloud_user_clicked)
+        self.upload_layer_combo.currentIndexChanged.connect(lambda *_: self._prefill_upload_name())
+        self.upload_button.clicked.connect(self._handle_upload_layer)
         cloud_session.sessionChanged.connect(lambda *_: self._update_session_ui())
         cloud_session.configChanged.connect(lambda *_: self._update_config_ui())
         cloud_session.layersChanged.connect(lambda *_: self._on_layers_changed())
@@ -285,12 +338,11 @@ class PowerBICloudDialog(SlimDialogBase):
     # ------------------------------------------------------------------ Admin actions
     def on_create_cloud_user_clicked(self):
         """Slot acionado a partir do botao da aba Admin."""
-        current_user = (cloud_session.session().get("username") or "").strip()
-        if current_user.lower() != ADMIN_EMAIL:
+        if not cloud_session.is_admin():
             QMessageBox.warning(
                 self,
                 "Permissao negada",
-                "Apenas o usuario admin@demo.dev pode criar novos usuarios Cloud.",
+                "Apenas usuarios admin podem criar novos usuarios Cloud.",
             )
             return
 
@@ -351,6 +403,160 @@ class PowerBICloudDialog(SlimDialogBase):
 
         fallback = detail or "Falha inesperada ao criar o usuario Cloud."
         QMessageBox.warning(self, "Erro ao criar usuario", fallback)
+
+    # ------------------------------------------------------------------ Upload actions
+    def _refresh_upload_layers(self):
+        project = QgsProject.instance()
+        layers: List[QgsVectorLayer] = []
+        if project is not None:
+            layers = [
+                layer
+                for layer in project.mapLayers().values()
+                if isinstance(layer, QgsVectorLayer) and layer.isValid()
+            ]
+            layers.sort(key=lambda lyr: (lyr.name() or "").lower())
+        self._upload_layers = layers
+
+        self.upload_layer_combo.blockSignals(True)
+        self.upload_layer_combo.clear()
+        active_id = None
+        try:
+            active_layer = iface.activeLayer()
+            if isinstance(active_layer, QgsVectorLayer) and active_layer.isValid():
+                active_id = active_layer.id()
+        except Exception:
+            active_id = None
+
+        for layer in layers:
+            self.upload_layer_combo.addItem(layer.name() or "Camada sem nome", layer.id())
+
+        if active_id:
+            idx = self.upload_layer_combo.findData(active_id)
+            if idx >= 0:
+                self.upload_layer_combo.setCurrentIndex(idx)
+        self.upload_layer_combo.blockSignals(False)
+
+        self._prefill_upload_name()
+        if not layers:
+            self._set_upload_status("Nenhuma camada vetorial disponivel no projeto atual.", level="error")
+        else:
+            self._set_upload_status("", level="info")
+
+    def _prefill_upload_name(self):
+        layer = self._current_upload_layer()
+        if layer is None:
+            self.upload_name_edit.clear()
+            return
+        if not self.upload_name_edit.text().strip():
+            self.upload_name_edit.setText(layer.name() or "")
+
+    def _current_upload_layer(self) -> Optional[QgsVectorLayer]:
+        if not self._upload_layers:
+            return None
+        layer_id = self.upload_layer_combo.currentData()
+        for layer in self._upload_layers:
+            if layer.id() == layer_id:
+                return layer
+        idx = self.upload_layer_combo.currentIndex()
+        if 0 <= idx < len(self._upload_layers):
+            return self._upload_layers[idx]
+        return None
+
+    def _set_upload_status(self, text: str, level: str = "info"):
+        colors = {"info": "#5D5A58", "ok": "#2F8D46", "error": "#B3261E"}
+        self.upload_status_label.setText(text or "")
+        self.upload_status_label.setStyleSheet(f"color: {colors.get(level, '#5D5A58')};")
+
+    def _handle_upload_layer(self):
+        if not cloud_session.is_authenticated() or not cloud_session.is_admin():
+            self._set_upload_status(
+                "Voce precisa estar conectado ao Cloud como administrador para enviar camadas.",
+                level="error",
+            )
+            QMessageBox.warning(
+                self,
+                "PowerBI Cloud",
+                "Voce precisa estar conectado ao Cloud como administrador para enviar camadas.",
+            )
+            return
+
+        layer = self._current_upload_layer()
+        if layer is None:
+            self._set_upload_status("Selecione uma camada do QGIS para enviar.", level="error")
+            QMessageBox.information(self, "PowerBI Cloud", "Nenhuma camada vetorial selecionada.")
+            return
+
+        layer_name = self.upload_name_edit.text().strip() or layer.name() or "camada"
+        description = self.upload_desc_edit.text().strip()
+
+        epsg = None
+        try:
+            epsg = layer.crs().postgisSrid() or None
+            if not epsg:
+                authid = layer.crs().authid()
+                if authid and ":" in authid:
+                    _, code = authid.split(":", 1)
+                    if code.isdigit():
+                        epsg = int(code)
+        except Exception:
+            epsg = None
+
+        tmp_dir = None
+        gpkg_path: Optional[Path] = None
+
+        try:
+            source = (layer.source() or "").split("|", 1)[0]
+            if source.lower().endswith(".gpkg") and os.path.exists(source):
+                gpkg_path = Path(source)
+            else:
+                tmp_dir = Path(tempfile.mkdtemp(prefix="pbi_cloud_upload_"))
+                gpkg_path = tmp_dir / f"{layer_name}.gpkg"
+                result = QgsVectorFileWriter.writeAsVectorFormat(
+                    layer,
+                    str(gpkg_path),
+                    "UTF-8",
+                    layer.crs(),
+                    "GPKG",
+                )
+                # writeAsVectorFormat returns error code (int) or tuple depending on QGIS version
+                error_code = result[0] if isinstance(result, (tuple, list)) else result
+                if error_code != QgsVectorFileWriter.NoError:
+                    raise RuntimeError("Falha ao exportar camada para GPKG temporario.")
+
+            self._set_upload_status("Enviando camada para o Cloud...", level="info")
+            try:
+                status_code, payload = cloud_session.upload_layer_gpkg(
+                    file_path=str(gpkg_path),
+                    name=layer_name,
+                    description=description,
+                    epsg=epsg,
+                )
+            except RuntimeError:
+                self._set_upload_status("Erro de comunicacao com o Cloud ao enviar camada.", level="error")
+                return
+
+            detail = ""
+            if isinstance(payload, dict):
+                detail = payload.get("detail") or payload.get("message") or payload.get("error") or ""
+
+            if status_code in (200, 201):
+                self._set_upload_status("Camada enviada para o Cloud com sucesso.", level="ok")
+                # Atualiza cache remoto/mock para refletir a nova camada
+                try:
+                    cloud_session.reload_mock_layers()
+                except Exception:
+                    pass
+                return
+
+            message = detail or "Erro ao enviar camada para o Cloud."
+            self._set_upload_status(f"Erro ao enviar camada para o Cloud: {message}", level="error")
+        except RuntimeError as exc:
+            self._set_upload_status(str(exc), level="error")
+        except Exception:
+            self._set_upload_status("Erro ao enviar camada para o Cloud.", level="error")
+        finally:
+            if tmp_dir:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
 
     # ------------------------------------------------------------------ Helpers
     def _set_status_badge(self, level: str, text: str):
@@ -420,6 +626,7 @@ class PowerBICloudDialog(SlimDialogBase):
     def _on_layers_changed(self):
         stamp = QDateTime.currentDateTime().toString("dd/MM HH:mm")
         self.last_sync_label.setText(stamp)
+        self._refresh_upload_layers()
 
     def _get_connection_registry(self):
         """Import lazy evita ciclo com browser_integration."""
@@ -470,28 +677,57 @@ class PowerBICloudDialog(SlimDialogBase):
             registry.replace_saved_connections(saved, persist=True)
 
     def _is_admin_user(self) -> bool:
-        username = (cloud_session.session().get("username") or "").strip().lower()
-        return cloud_session.is_authenticated() and username == ADMIN_EMAIL
+        return cloud_session.is_admin()
 
     def _update_admin_tab_visibility(self):
-        # Aba Admin so fica visivel quando o admin estiver autenticado.
+        # Abas Admin/Upload so ficam visiveis quando um admin estiver autenticado.
         if not hasattr(self, "admin_tab_index"):
             return
         is_admin = self._is_admin_user()
-        if hasattr(self.tabs, "setTabVisible"):
-            self.tabs.setTabVisible(self.admin_tab_index, is_admin)
-        else:
-            self.tabs.setTabEnabled(self.admin_tab_index, is_admin)
-            admin_widget = self.tabs.widget(self.admin_tab_index)
-            if admin_widget is not None:
-                admin_widget.setVisible(is_admin)
-        if not is_admin and self.tabs.currentIndex() == self.admin_tab_index:
-            self.tabs.setCurrentIndex(0)
+        target_tabs = [self.admin_tab_index, getattr(self, "upload_tab_index", -1)]
+        for tab_index in target_tabs:
+            if tab_index is None or tab_index < 0:
+                continue
+            if hasattr(self.tabs, "setTabVisible"):
+                self.tabs.setTabVisible(tab_index, is_admin)
+            else:
+                self.tabs.setTabEnabled(tab_index, is_admin)
+                tab_widget = self.tabs.widget(tab_index)
+                if tab_widget is not None:
+                    tab_widget.setVisible(is_admin)
+        if hasattr(self, "upload_button"):
+            self.upload_button.setEnabled(is_admin)
+        if not is_admin and self.tabs.currentIndex() in target_tabs:
+            self.tabs.setCurrentIndex(self.session_tab_index if hasattr(self, "session_tab_index") else 0)
+
+    def _select_initial_tab(self, initial_tab: Optional[str]):
+        if not initial_tab:
+            return
+        key = initial_tab.strip().lower()
+        tab_map = {
+            "sessao": self.session_tab_index,
+            "session": self.session_tab_index,
+            "config": self.config_tab_index,
+            "configuracoes": self.config_tab_index,
+            "admin": self.admin_tab_index,
+            "upload": getattr(self, "upload_tab_index", -1),
+        }
+        target = tab_map.get(key, -1)
+        if target is not None and target >= 0:
+            admin_tabs = {self.admin_tab_index, getattr(self, "upload_tab_index", -1)}
+            if target in admin_tabs and not self._is_admin_user():
+                return
+            try:
+                if hasattr(self.tabs, "isTabEnabled") and not self.tabs.isTabEnabled(target):
+                    return
+            except Exception:
+                pass
+            self.tabs.setCurrentIndex(target)
 
 
-def open_cloud_dialog(parent: Optional[QWidget] = None) -> PowerBICloudDialog:
+def open_cloud_dialog(parent: Optional[QWidget] = None, initial_tab: Optional[str] = None) -> PowerBICloudDialog:
     """Helper used by different entry points."""
-    dialog = PowerBICloudDialog(parent)
+    dialog = PowerBICloudDialog(parent, initial_tab=initial_tab)
     dialog.exec_()
     return dialog
 

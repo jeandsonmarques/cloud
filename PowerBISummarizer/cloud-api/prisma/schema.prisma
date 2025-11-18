@@ -20,10 +20,15 @@ model User {
 model Layer {
   id         Int      @id @default(autoincrement())
   name       String   @unique @db.VarChar(255)
-  schemaName String   @map("schema") @db.VarChar(255)
-  srid       Int
-  geomType   String   @map("geom_type") @db.VarChar(50)
+  provider   String   @default("postgis") @db.VarChar(50)
+  uri        String?  @db.Text
+  schemaName String?  @map("schema") @db.VarChar(255)
+  srid       Int?
+  epsg       Int?
+  geomType   String?  @map("geom_type") @db.VarChar(50)
   createdAt  DateTime @default(now()) @map("created_at")
+  createdByUserId Int? @map("created_by_user_id")
+  createdBy  User?    @relation(fields: [createdByUserId], references: [id])
 
   @@map("layers")
 }

@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
 from app.admin import admin_router
+from app.config import UPLOAD_DIR
 from . import auth, db, models, schemas
 
 API_BASEPATH = os.getenv("API_BASEPATH", "/api/v1")
@@ -29,6 +30,11 @@ app.add_middleware(
 )
 
 api_router = APIRouter()
+
+
+@app.on_event("startup")
+def _ensure_upload_dir() -> None:
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
 @api_router.get("/health", tags=["health"])  # Simple readiness probe

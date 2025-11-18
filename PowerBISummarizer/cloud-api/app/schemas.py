@@ -58,6 +58,11 @@ class LayerOut(BaseModel):
 
     id: int
     name: str
-    schema: str
-    srid: int
-    geom_type: str
+    provider: str
+    uri: str | None = None
+    epsg: int | None = None
+    schema: str | None = None
+    srid: int | None = None
+    geom_type: str | None = None
+    created_at: datetime
+    created_by_user_id: int | None = None

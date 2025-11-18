@@ -1,4 +1,6 @@
 """Script para criar tabelas e semear dados basicos."""
+from typing import Optional, Tuple
+
 from sqlalchemy.orm import Session
 
 from .auth import hash_password
@@ -9,28 +11,49 @@ ADMIN_EMAIL = "admin@demo.dev"
 ADMIN_PASSWORD = "demo123"
 
 LAYER_SEEDS = [
-    {"name": "redes_esgoto", "schema": "public", "srid": 31984, "geom_type": "LINESTRING"},
-    {"name": "pocos_bombeamento", "schema": "public", "srid": 31984, "geom_type": "POINT"},
-    {"name": "bairros", "schema": "public", "srid": 31984, "geom_type": "MULTIPOLYGON"},
+    {
+        "name": "redes_esgoto",
+        "provider": "postgis",
+        "schema": "public",
+        "srid": 31984,
+        "epsg": 31984,
+        "geom_type": "LINESTRING",
+    },
+    {
+        "name": "pocos_bombeamento",
+        "provider": "postgis",
+        "schema": "public",
+        "srid": 31984,
+        "epsg": 31984,
+        "geom_type": "POINT",
+    },
+    {
+        "name": "bairros",
+        "provider": "postgis",
+        "schema": "public",
+        "srid": 31984,
+        "epsg": 31984,
+        "geom_type": "MULTIPOLYGON",
+    },
 ]
 
 
-def _ensure_admin(session: Session) -> bool:
+def _ensure_admin(session: Session) -> Tuple[User, bool]:
     admin = session.query(User).filter(User.email == ADMIN_EMAIL).first()
     if admin:
-        return False
+        return admin, False
 
-    session.add(
-        User(
-            email=ADMIN_EMAIL,
-            password_hash=hash_password(ADMIN_PASSWORD),
-            role="admin",
-        )
+    admin = User(
+        email=ADMIN_EMAIL,
+        password_hash=hash_password(ADMIN_PASSWORD),
+        role="admin",
     )
-    return True
+    session.add(admin)
+    session.flush()  # ensure admin.id is available
+    return admin, True
 
 
-def _seed_layers(session: Session) -> int:
+def _seed_layers(session: Session, creator_id: Optional[int]) -> int:
     seed_names = [layer["name"] for layer in LAYER_SEEDS]
     existing = {
         row[0]
@@ -43,7 +66,12 @@ def _seed_layers(session: Session) -> int:
     for payload in LAYER_SEEDS:
         if payload["name"] in existing:
             continue
-        session.add(Layer(**payload))
+        session.add(
+            Layer(
+                **payload,
+                created_by_user_id=creator_id,
+            )
+        )
         created += 1
     return created
 
@@ -51,12 +79,14 @@ def _seed_layers(session: Session) -> int:
 def main() -> None:
     Base.metadata.create_all(bind=engine)
     session = SessionLocal()
+    admin = None
     admin_created = False
     layers_created = 0
 
     try:
-        admin_created = _ensure_admin(session)
-        layers_created = _seed_layers(session)
+        admin, admin_created = _ensure_admin(session)
+        admin_id = admin.id if admin else None
+        layers_created = _seed_layers(session, creator_id=admin_id)
         session.commit()
     except Exception:
         session.rollback()

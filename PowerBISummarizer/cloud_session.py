@@ -24,6 +24,7 @@ _HERE = os.path.dirname(__file__)
 _CLOUD_SAMPLES_DIR = os.path.join(_HERE, "resources", "cloud_samples")
 REQUEST_TIMEOUT = 15
 ACTIVE_CONNECTION_KEY = "PowerBISummarizer/cloud/active_connection"
+ADMIN_EMAIL = "admin@demo.dev"
 
 
 @dataclass
@@ -227,6 +228,35 @@ class PowerBICloudSession(QObject):
         except ValueError as exc:
             raise RuntimeError("Resposta invalida recebida do PowerBI Cloud.") from exc
 
+    def _fetch_profile(self, token: str, token_type: str) -> Dict:
+        """Fetches /me to enrich session with role/id info. Best effort; ignores failures."""
+        if requests is None:
+            return {}
+        prefix = "Bearer" if (token_type or "").lower() == "bearer" else (token_type or "Bearer").capitalize()
+        headers = {"Authorization": f"{prefix} {token}"}
+        url = self._build_url("/api/v1/me")
+        try:
+            response = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
+            response.raise_for_status()
+            data = response.json()
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    def _enrich_session_with_profile(self, session: Dict, profile: Dict) -> Dict:
+        if not isinstance(profile, dict):
+            return session
+        role = (profile.get("role") or "").strip()
+        if role:
+            session["role"] = role
+        if profile.get("is_admin") is True:
+            session.setdefault("role", "admin")
+            session["is_admin"] = True
+        user_id = profile.get("id")
+        if user_id is not None:
+            session["user_id"] = user_id
+        return session
+
     def _remote_login(self, username: str, password: str) -> Dict:
         payload = {"email": username, "password": password}
         data = self._request_json("POST", self._config.get("login_endpoint"), payload=payload)
@@ -241,6 +271,9 @@ class PowerBICloudSession(QObject):
             "mode": "remote",
             "token_type": (data.get("token_type") or "bearer").lower(),
         }
+        profile = self._fetch_profile(token, session["token_type"])
+        if profile:
+            session = self._enrich_session_with_profile(session, profile)
         expires_in = int(data.get("expires_in") or 0)
         if expires_in > 0:
             session["expires_in"] = expires_in
@@ -251,12 +284,17 @@ class PowerBICloudSession(QObject):
         seed = f"{username}:{uuid.uuid4().hex}"
         token = hashlib.sha256(seed.encode("utf-8")).hexdigest()
         issued = QDateTime.currentDateTime().toString(Qt.ISODate)
-        return {
+        role = "admin" if username.strip().lower() == ADMIN_EMAIL else "user"
+        session = {
             "username": username,
             "token": token[:48],
             "issued": issued,
             "mode": "mock",
         }
+        session["role"] = role
+        if role == "admin":
+            session["is_admin"] = True
+        return session
 
     def _auth_headers(self) -> Dict[str, str]:
         token = self._session.get("token")
@@ -284,6 +322,46 @@ class PowerBICloudSession(QObject):
         except ValueError:
             data = {}
         return response.status_code, data
+
+    def upload_layer_gpkg(
+        self,
+        *,
+        file_path: str,
+        name: str,
+        description: str = "",
+        epsg: Optional[int] = None,
+    ) -> Tuple[int, Dict]:
+        """Envia um GPKG real para /api/v1/admin/upload-layer-gpkg usando o token atual."""
+        if requests is None:
+            raise RuntimeError("O modulo 'requests' nao esta disponivel no ambiente do QGIS.")
+        url = self._build_url("/api/v1/admin/upload-layer-gpkg")
+        headers = dict(self._auth_headers())
+        headers.pop("Content-Type", None)  # requests define boundary para multipart
+
+        data: Dict[str, str] = {"name": name}
+        if description:
+            data["description"] = description
+        if epsg is not None:
+            data["epsg"] = str(epsg)
+
+        with open(file_path, "rb") as handler:
+            files = {"file": (os.path.basename(file_path), handler, "application/octet-stream")}
+            try:
+                response = requests.post(
+                    url,
+                    data=data,
+                    files=files,
+                    headers=headers,
+                    timeout=REQUEST_TIMEOUT,
+                )
+            except RequestException as exc:
+                raise RuntimeError(f"Falha ao conectar ao PowerBI Cloud ({url}): {exc}") from exc
+
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = {}
+        return response.status_code, payload
 
     def _should_use_remote_layers(self) -> bool:
         if not self.hosting_ready():
@@ -342,6 +420,15 @@ class PowerBICloudSession(QObject):
             if expiry.isValid() and expiry < QDateTime.currentDateTimeUtc():
                 return False
         return True
+
+    def is_admin(self) -> bool:
+        if not self.is_authenticated():
+            return False
+        role = (self._session.get("role") or "").lower()
+        if role == "admin" or self._session.get("is_admin") is True:
+            return True
+        username = (self._session.get("username") or "").strip().lower()
+        return username == ADMIN_EMAIL
 
     def session(self) -> Dict:
         return dict(self._session)

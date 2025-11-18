@@ -12,19 +12,23 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS layers (
     id SERIAL PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,
-    schema TEXT NOT NULL DEFAULT 'public',
-    srid INT NOT NULL,
-    geom_type TEXT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    provider TEXT NOT NULL DEFAULT 'postgis',
+    uri TEXT,
+    schema TEXT DEFAULT 'public',
+    srid INT,
+    epsg INT,
+    geom_type TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_by_user_id INT REFERENCES users(id)
 );
 
 INSERT INTO users (email, password_hash, role)
 VALUES ('admin@demo.dev', crypt('demo123', gen_salt('bf')), 'admin')
 ON CONFLICT (email) DO NOTHING;
 
-INSERT INTO layers (name, schema, srid, geom_type)
+INSERT INTO layers (name, provider, uri, schema, srid, epsg, geom_type, created_by_user_id)
 VALUES
-    ('redes_esgoto', 'public', 31984, 'LINESTRING'),
-    ('pocos_bombeamento', 'public', 31984, 'POINT'),
-    ('bairros', 'public', 31984, 'MULTIPOLYGON')
+    ('redes_esgoto', 'postgis', NULL, 'public', 31984, 31984, 'LINESTRING', 1),
+    ('pocos_bombeamento', 'postgis', NULL, 'public', 31984, 31984, 'POINT', 1),
+    ('bairros', 'postgis', NULL, 'public', 31984, 31984, 'MULTIPOLYGON', 1)
 ON CONFLICT (name) DO NOTHING;
