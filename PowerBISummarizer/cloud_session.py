@@ -674,7 +674,7 @@ class PowerBICloudSession(QObject):
             data["description"] = description
         if epsg is not None:
             data["epsg"] = str(epsg)
-        if group_name:
+        if group_name is not None:
             data["group_name"] = group_name
 
         with open(file_path, "rb") as handler:

@@ -13,8 +13,12 @@
           "source": "resources/mock_cloud_layers/clientes_sp.geojson",
           "geometry": "Point",
           "provider": "ogr",
-          "tags": ["clientes", "sudeste"],
-          "mock_only": true
+          "tags": [
+            "clientes",
+            "sudeste"
+          ],
+          "mock_only": true,
+          "group_name": "Default"
         },
         {
           "id": "infra_linhas_cloud",
@@ -23,8 +27,12 @@
           "source": "resources/mock_cloud_layers/infra_linhas.geojson",
           "geometry": "LineString",
           "provider": "ogr",
-          "tags": ["infra", "rede"],
-          "mock_only": true
+          "tags": [
+            "infra",
+            "rede"
+          ],
+          "mock_only": true,
+          "group_name": "Default"
         }
       ]
     },
@@ -41,8 +49,12 @@
           "source": "resources/mock_cloud_layers/sensores_manaus.geojson",
           "geometry": "Point",
           "provider": "ogr",
-          "tags": ["sensores", "norte"],
-          "mock_only": true
+          "tags": [
+            "sensores",
+            "norte"
+          ],
+          "mock_only": true,
+          "group_name": "Default"
         }
       ]
     }
