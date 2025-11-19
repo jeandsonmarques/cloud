@@ -312,7 +312,20 @@ class PowerBICloudRootItem(QgsDataCollectionItem):
     def createChildren(self) -> List[QgsDataItem]:
         if not cloud_session.is_authenticated():
             return [PowerBICloudLoginItem(self)]
-        return [PowerBICloudConnectionsFolder(self)]
+        connections = cloud_session.cloud_connections()
+        layers: List[Dict] = []
+        for connection in connections:
+            layers.extend(connection.get("layers") or [])
+        if not layers:
+            return [PowerBICloudPlaceholderItem(self)]
+        grouped: Dict[str, List[Dict]] = defaultdict(list)
+        for layer in layers:
+            key = (layer.get("group_name") or "").strip()
+            grouped[key].append(layer)
+        items: List[QgsDataItem] = []
+        for group_key in sorted(grouped.keys(), key=lambda value: (value == "", value.lower())):
+            items.append(PowerBICloudGroupItem(self, group_key, grouped[group_key]))
+        return items
 
 
 class PowerBICloudLoginItem(QgsDataCollectionItem):
@@ -331,30 +344,6 @@ class PowerBICloudLoginItem(QgsDataCollectionItem):
 
     def createChildren(self) -> List[QgsDataItem]:
         return []
-
-
-class PowerBICloudConnectionsFolder(QgsDataCollectionItem):
-    """Container that lists the mock connections made available after login."""
-
-    def __init__(self, parent: QgsDataItem):
-        super().__init__(
-            parent,
-            "Conexões",
-            f"{parent.path()}/connections",
-            PowerBISummarizerBrowserProvider.PROVIDER_NAME,
-        )
-        self.setIcon(CONNECTION_ICON)
-        cloud_session.layersChanged.connect(self.refresh)
-        cloud_session.sessionChanged.connect(self.refresh)
-
-    def createChildren(self) -> List[QgsDataItem]:
-        connections = cloud_session.cloud_connections()
-        if not connections:
-            return [PowerBICloudPlaceholderItem(self)]
-        items: List[QgsDataItem] = []
-        for conn in connections:
-            items.append(PowerBICloudConnectionItem(self, conn))
-        return items
 
 
 class PowerBICloudPlaceholderItem(QgsDataCollectionItem):
@@ -394,57 +383,6 @@ class PowerBICloudGroupItem(QgsDataCollectionItem):
         return items
 
 
-class PowerBICloudConnectionItem(QgsDataCollectionItem):
-    """Represents each mock Cloud connection within the browser."""
-
-    def __init__(self, parent: QgsDataItem, connection: Dict):
-        self.meta = dict(connection or {})
-        conn_id = self.meta.get("id") or f"cloud_{id(self)}"
-        name = self.meta.get("name") or "PowerBI Cloud"
-        path = f"{parent.path()}/{conn_id}"
-        super().__init__(parent, name, path, PowerBISummarizerBrowserProvider.PROVIDER_NAME)
-        self.setIcon(CLOUD_ICON)
-
-    def createChildren(self) -> List[QgsDataItem]:
-        layers = self.meta.get("layers") or []
-        if not layers:
-            return [PowerBICloudPlaceholderItem(self)]
-        grouped: Dict[str, List[Dict]] = defaultdict(list)
-        for layer in layers:
-            key = (layer.get("group_name") or "").strip()
-            grouped[key].append(layer)
-        items: List[QgsDataItem] = []
-        for group_key in sorted(grouped.keys(), key=lambda value: (value == "", value.lower())):
-            items.append(PowerBICloudGroupItem(self, group_key, grouped[group_key]))
-        return items
-
-    def actions(self, parent: Optional[QWidget]) -> List[QAction]:
-        widget = parent
-        actions: List[QAction] = []
-
-        refresh_action = QAction("Atualizar catálogo Cloud", widget)
-        refresh_action.triggered.connect(cloud_session.reload_mock_layers)
-        actions.append(refresh_action)
-
-        details_action = QAction("Detalhes da conexão", widget)
-        details_action.triggered.connect(self._show_details)
-        actions.append(details_action)
-
-        logout_action = QAction("Desconectar Cloud", widget)
-        logout_action.triggered.connect(cloud_session.logout)
-        actions.append(logout_action)
-
-        return actions
-
-    def _show_details(self):
-        text = [
-            f"Status: {self.meta.get('status', '-')}",
-            f"Descrição: {self.meta.get('description') or 'Sem descrição.'}",
-            f"Camadas mock: {len(self.meta.get('layers') or [])}",
-        ]
-        QMessageBox.information(None, "PowerBI Cloud", "\n".join(text))
-
-
 class PowerBICloudLayerItem(QgsLayerItem):
     """Layer entry that references local mock datasets."""
 
@@ -456,10 +394,7 @@ class PowerBICloudLayerItem(QgsLayerItem):
         raw_source = self.meta.get("source") or ""
         provider = (self.meta.get("provider") or "ogr").lower()
         provider_raw = (self.meta.get("provider_raw") or provider).lower()
-        if provider_raw == "gpkg" and raw_source.startswith("/vsicurl/"):
-            source = raw_source
-        else:
-            source = os.path.normpath(raw_source) if raw_source else ""
+        source = raw_source
         if provider_raw == "gpkg":
             print(f"[PowerBI Cloud] Layer item using source (repr): {source!r}")
         provider = self.meta.get("provider") or "ogr"
