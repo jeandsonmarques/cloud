@@ -80,11 +80,17 @@ class PowerBICloudDialog(SlimDialogBase):
         self.password_edit = QLineEdit(session_tab)
         self.password_edit.setEchoMode(QLineEdit.Password)
         self.password_edit.setPlaceholderText("********")
+        self.remember_checkbox = QCheckBox("Salvar login no gerenciador de conexões QGIS", session_tab)
+        self.remember_checkbox.setToolTip(
+            "Armazena usuario e senha no AuthManager do QGIS para renovar tokens automaticamente."
+        )
+        self.remember_checkbox.setChecked(cloud_session.has_saved_credentials())
 
         session_layout.addWidget(QLabel("Usuario", session_tab), 0, 0)
         session_layout.addWidget(self.user_edit, 0, 1)
         session_layout.addWidget(QLabel("Senha", session_tab), 1, 0)
         session_layout.addWidget(self.password_edit, 1, 1)
+        session_layout.addWidget(self.remember_checkbox, 2, 0, 1, 2)
 
         buttons_row = QHBoxLayout()
         buttons_row.setSpacing(8)
@@ -100,18 +106,18 @@ class PowerBICloudDialog(SlimDialogBase):
         buttons_row.addWidget(self.refresh_btn)
         buttons_row.addWidget(self.browser_btn)
         buttons_row.addStretch(1)
-        session_layout.addLayout(buttons_row, 2, 0, 1, 2)
+        session_layout.addLayout(buttons_row, 3, 0, 1, 2)
 
         self.session_detail = QLabel("Status: aguardando login.", session_tab)
         self.session_detail.setWordWrap(True)
-        session_layout.addWidget(self.session_detail, 3, 0, 1, 2)
+        session_layout.addWidget(self.session_detail, 4, 0, 1, 2)
 
         sync_layout = QHBoxLayout()
         sync_layout.addWidget(QLabel("Ultima sincronizacao mock:", session_tab))
         self.last_sync_label = QLabel("-", session_tab)
         sync_layout.addWidget(self.last_sync_label)
         sync_layout.addStretch(1)
-        session_layout.addLayout(sync_layout, 4, 0, 1, 2)
+        session_layout.addLayout(sync_layout, 5, 0, 1, 2)
 
         self.warning_label = QLabel(
             "Cloud em preparacao. Camadas reais serao liberadas quando a hospedagem estiver ativa.",
@@ -119,7 +125,7 @@ class PowerBICloudDialog(SlimDialogBase):
         )
         self.warning_label.setWordWrap(True)
         self.warning_label.setProperty("role", "helper")
-        session_layout.addWidget(self.warning_label, 5, 0, 1, 2)
+        session_layout.addWidget(self.warning_label, 6, 0, 1, 2)
 
         self.session_tab_index = self.tabs.addTab(session_tab, "Sessao")
 
@@ -285,6 +291,7 @@ class PowerBICloudDialog(SlimDialogBase):
             )
             # Após login bem-sucedido, atualizamos o e-mail padrão vinculado à conexão ativa.
             self._persist_cloud_user_from_login(username)
+            cloud_session.update_saved_credentials(username, password, self.remember_checkbox.isChecked())
         except ValueError as exc:
             QMessageBox.warning(self, "PowerBI Cloud", str(exc))
         except Exception as exc:  # pragma: no cover - runtime safeguard
@@ -586,6 +593,7 @@ class PowerBICloudDialog(SlimDialogBase):
         level = payload.get("level") or "offline"
         status_text = payload.get("text") or "Desconectado"
         self._set_status_badge(level, status_text)
+        self.remember_checkbox.setChecked(cloud_session.has_saved_credentials())
         is_auth = cloud_session.is_authenticated()
         self.login_btn.setEnabled(not is_auth)
         self.user_edit.setEnabled(not is_auth)

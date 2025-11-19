@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -8,7 +9,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from qgis.PyQt.QtCore import QObject, QDateTime, QSettings, Qt, pyqtSignal
-from qgis.core import Qgis, QgsDataSourceUri, QgsMessageLog
+from qgis.core import Qgis, QgsApplication, QgsAuthMethodConfig, QgsDataSourceUri, QgsMessageLog
 
 try:  # pragma: no cover - QGIS ships requests by default
     import requests
@@ -26,6 +27,8 @@ _CLOUD_SAMPLES_DIR = os.path.join(_HERE, "resources", "cloud_samples")
 REQUEST_TIMEOUT = 15
 ACTIVE_CONNECTION_KEY = "PowerBISummarizer/cloud/active_connection"
 ADMIN_EMAIL = "admin@demo.dev"
+AUTHCFG_SETTINGS_KEY = "PowerBISummarizer/cloud/authcfg_id"
+TOKEN_REFRESH_THRESHOLD = 300  # seconds
 
 
 @dataclass
@@ -123,6 +126,41 @@ def build_gpkg_vsicurl_path(
     return download_url, vsicurl_path
 
 
+def _obfuscate_token(token: str) -> str:
+    if not token:
+        return ""
+    reversed_bytes = token[::-1].encode("utf-8")
+    encoded = base64.urlsafe_b64encode(reversed_bytes).decode("ascii")
+    return f"obf:{encoded}"
+
+
+def _deobfuscate_token(raw: str) -> str:
+    if not raw:
+        return ""
+    if not raw.startswith("obf:"):
+        return raw
+    payload = raw[4:]
+    try:
+        decoded = base64.urlsafe_b64decode(payload.encode("ascii"))
+        return decoded.decode("utf-8")[::-1]
+    except Exception:
+        return raw
+
+
+def _decode_jwt_payload(token: str) -> Dict[str, Any]:
+    parts = token.split(".")
+    if len(parts) < 2:
+        return {}
+    payload = parts[1]
+    padding = "=" * (-len(payload) % 4)
+    try:
+        raw = base64.urlsafe_b64decode(f"{payload}{padding}".encode("ascii"))
+        data = json.loads(raw.decode("utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
 class PowerBICloudSession(QObject):
     """Keeps track of the fake Cloud session, config and layer catalog."""
 
@@ -136,9 +174,16 @@ class PowerBICloudSession(QObject):
     def __init__(self):
         super().__init__()
         self._settings = QSettings()
+        self._authcfg_id = str(self._settings.value(AUTHCFG_SETTINGS_KEY, "") or "")
+        self._is_reloading = False
         self._session = self._load_session()
         self._config = self._load_config()
         self._connections = self._load_mock_connections()
+        if self._session.get("mode") == "remote":
+            try:
+                self._ensure_valid_remote_token(interactive=False)
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------ Internal helpers
     def _session_path(self) -> str:
@@ -150,7 +195,18 @@ class PowerBICloudSession(QObject):
             return {}
         try:
             payload = json.loads(raw)
-            if isinstance(payload, dict) and payload.get("token"):
+            if isinstance(payload, dict):
+                token = payload.get("token")
+                if token:
+                    payload["token"] = _deobfuscate_token(token)
+                self._apply_token_metadata(payload)
+                expiry = payload.get("expires_at")
+                if expiry and payload.get("mode") == "remote":
+                    QgsMessageLog.logMessage(
+                        f"PowerBI Cloud token carregado do QSettings. Valido ate {expiry}.",
+                        "PowerBI Summarizer",
+                        Qgis.Info,
+                    )
                 return payload
         except Exception:
             pass
@@ -158,7 +214,13 @@ class PowerBICloudSession(QObject):
 
     def _persist_session(self):
         if self._session:
-            self._settings.setValue(self.SESSION_KEY, json.dumps(self._session))
+            payload = dict(self._session)
+            token = payload.get("token")
+            if token:
+                payload["token"] = _obfuscate_token(token)
+            payload.pop("token_claims", None)
+            payload.pop("token_expiry_unix", None)
+            self._settings.setValue(self.SESSION_KEY, json.dumps(payload))
         else:
             self._settings.remove(self.SESSION_KEY)
 
@@ -188,6 +250,151 @@ class PowerBICloudSession(QObject):
 
     def _persist_config(self):
         self._settings.setValue(self.CONFIG_KEY, json.dumps(self._config))
+
+    def _apply_token_metadata(self, session: Dict):
+        session.pop("token_claims", None)
+        session.pop("token_expiry_unix", None)
+        token = session.get("token") or ""
+        if not token:
+            return
+        claims = _decode_jwt_payload(token)
+        if not claims:
+            return
+        session["token_claims"] = claims
+        exp_value = claims.get("exp")
+        if isinstance(exp_value, (int, float)):
+            exp_int = int(exp_value)
+            session["token_expiry_unix"] = exp_int
+            expiry_dt = QDateTime.fromSecsSinceEpoch(exp_int, Qt.UTC)
+            session["expires_at"] = expiry_dt.toString(Qt.ISODate)
+            QgsMessageLog.logMessage(
+                f"PowerBI Cloud token valido ate {session['expires_at']}.",
+                "PowerBI Summarizer",
+                Qgis.Info,
+            )
+
+    def _seconds_until_expiry(self) -> Optional[int]:
+        if not self._session.get("token"):
+            return None
+        exp_unix = self._session.get("token_expiry_unix")
+        if not exp_unix:
+            expiry = self._session.get("expires_at")
+            if expiry:
+                stamp = QDateTime.fromString(expiry, Qt.ISODate)
+                if stamp.isValid():
+                    exp_unix = stamp.toSecsSinceEpoch()
+        if not exp_unix:
+            return None
+        now = QDateTime.currentDateTimeUtc().toSecsSinceEpoch()
+        return int(exp_unix) - now
+
+    def _ensure_valid_remote_token(self, *, interactive: bool = False):
+        if self._session.get("mode") != "remote":
+            return
+        token = self._session.get("token")
+        seconds = self._seconds_until_expiry()
+        if not token or (seconds is not None and seconds <= 0):
+            QgsMessageLog.logMessage(
+                "PowerBI Cloud token expirado — renovando...",
+                "PowerBI Summarizer",
+                Qgis.Info,
+            )
+            refreshed = self._try_auto_login(reload_layers=not self._is_reloading)
+            if not refreshed:
+                raise RuntimeError("Token do PowerBI Cloud expirado. Realize o login novamente.")
+            return
+        if seconds is not None and seconds < TOKEN_REFRESH_THRESHOLD:
+            QgsMessageLog.logMessage(
+                "PowerBI Cloud token proximo do vencimento — renovando...",
+                "PowerBI Summarizer",
+                Qgis.Info,
+            )
+            self._try_auto_login(reload_layers=not self._is_reloading)
+
+    def _try_auto_login(self, *, reload_layers: bool) -> bool:
+        credentials = self._load_saved_credentials()
+        if not credentials:
+            return False
+        username, password = credentials
+        if not username or not password:
+            return False
+        try:
+            session = self._remote_login(username, password)
+        except Exception as exc:
+            QgsMessageLog.logMessage(
+                f"PowerBI Cloud falhou ao renovar token automaticamente: {exc}",
+                "PowerBI Summarizer",
+                Qgis.Warning,
+            )
+            return False
+        QgsMessageLog.logMessage(
+            "PowerBI Cloud token renovado automaticamente.",
+            "PowerBI Summarizer",
+            Qgis.Info,
+        )
+        self._apply_session(session, reload_layers=reload_layers)
+        return True
+
+    def _load_saved_credentials(self) -> Optional[Tuple[str, str]]:
+        if not self._authcfg_id:
+            return None
+        auth_config = QgsAuthMethodConfig()
+        manager = QgsApplication.authManager()
+        try:
+            if not manager.loadAuthenticationConfig(self._authcfg_id, auth_config):
+                return None
+        except Exception:
+            return None
+        username = auth_config.config("username")
+        password = auth_config.config("password")
+        if username and password:
+            return str(username), str(password)
+        return None
+
+    def update_saved_credentials(self, username: str, password: str, remember: bool):
+        if remember:
+            self._store_credentials(username, password)
+        else:
+            self.clear_saved_credentials()
+
+    def has_saved_credentials(self) -> bool:
+        return bool(self._load_saved_credentials())
+
+    def _store_credentials(self, username: str, password: str):
+        manager = QgsApplication.authManager()
+        config = QgsAuthMethodConfig("Basic")
+        config.setName("PowerBI Cloud")
+        config.setConfig("username", username)
+        config.setConfig("password", password)
+        if self._authcfg_id:
+            config.setId(self._authcfg_id)
+            if not manager.updateAuthenticationConfig(config):
+                raise RuntimeError("Nao foi possivel atualizar as credenciais salvas no QGIS.")
+        else:
+            if not manager.storeAuthenticationConfig(config):
+                raise RuntimeError("Nao foi possivel salvar as credenciais no QGIS.")
+            self._authcfg_id = config.id()
+            self._settings.setValue(AUTHCFG_SETTINGS_KEY, self._authcfg_id)
+
+    def clear_saved_credentials(self):
+        if not self._authcfg_id:
+            return
+        manager = QgsApplication.authManager()
+        try:
+            manager.removeAuthenticationConfig(self._authcfg_id)
+        except Exception:
+            pass
+        self._authcfg_id = ""
+        self._settings.remove(AUTHCFG_SETTINGS_KEY)
+
+    def _apply_session(self, session: Dict, *, reload_layers: bool = True, notify: bool = True):
+        self._session = dict(session)
+        self._apply_token_metadata(self._session)
+        self._persist_session()
+        if notify:
+            self.sessionChanged.emit(dict(self._session))
+        if reload_layers:
+            self.reload_mock_layers()
 
     def _load_mock_connections(self) -> List[Dict]:
         path = self._session_path()
@@ -416,6 +623,7 @@ class PowerBICloudSession(QObject):
         return session
 
     def _auth_headers(self) -> Dict[str, str]:
+        self._ensure_valid_remote_token(interactive=False)
         token = self._session.get("token")
         if not token:
             raise RuntimeError("Sessao Cloud nao autenticada.")
@@ -487,6 +695,11 @@ class PowerBICloudSession(QObject):
             return False
         if self._session.get("mode") != "remote":
             return False
+        if not self.is_authenticated():
+            try:
+                self._ensure_valid_remote_token(interactive=False)
+            except Exception:
+                return False
         return self.is_authenticated()
 
     def _fetch_remote_layers(self) -> List[Dict]:
@@ -600,11 +813,9 @@ class PowerBICloudSession(QObject):
         token = self._session.get("token")
         if not token:
             return False
-        expires_at = self._session.get("expires_at")
-        if expires_at:
-            expiry = QDateTime.fromString(expires_at, Qt.ISODate)
-            if expiry.isValid() and expiry < QDateTime.currentDateTimeUtc():
-                return False
+        seconds = self._seconds_until_expiry()
+        if seconds is not None and seconds <= 0:
+            return False
         return True
 
     def is_admin(self) -> bool:
@@ -633,15 +844,12 @@ class PowerBICloudSession(QObject):
             session = self._remote_login(username, password)
         else:
             session = self._mock_login(username)
-        self._session = dict(session)
-        self._persist_session()
+        self._apply_session(session)
         mode = self._session.get("mode") or "mock"
         if mode == "remote":
             print(f"[PowerBI Cloud] Sessao remota autenticada para {username}.")
         else:
             print(f"[PowerBI Cloud] Sessao mock autenticada para {username}.")
-        self.sessionChanged.emit(dict(self._session))
-        self.reload_mock_layers()
         return dict(self._session)
 
     def logout(self):
@@ -687,17 +895,23 @@ class PowerBICloudSession(QObject):
             self.configChanged.emit(dict(self._config))
 
     def reload_mock_layers(self):
+        if self._is_reloading:
+            return
+        self._is_reloading = True
         try:
-            if self._should_use_remote_layers():
-                self._connections = self._fetch_remote_layers()
-                print("[PowerBI Cloud] Catalogo remoto atualizado.")
-            else:
+            try:
+                if self._should_use_remote_layers():
+                    self._connections = self._fetch_remote_layers()
+                    print("[PowerBI Cloud] Catalogo remoto atualizado.")
+                else:
+                    self._connections = self._load_mock_connections()
+                    print("[PowerBI Cloud] Catalogo mock atualizado.")
+            except Exception as exc:  # pragma: no cover - runtime safeguard
+                print(f"[PowerBI Cloud] Falha ao atualizar catalogo remoto: {exc}. Voltando ao mock.")
                 self._connections = self._load_mock_connections()
-                print("[PowerBI Cloud] Catalogo mock atualizado.")
-        except Exception as exc:  # pragma: no cover - runtime safeguard
-            print(f"[PowerBI Cloud] Falha ao atualizar catalogo remoto: {exc}. Voltando ao mock.")
-            self._connections = self._load_mock_connections()
-        self.layersChanged.emit(self.cloud_connections())
+            self.layersChanged.emit(self.cloud_connections())
+        finally:
+            self._is_reloading = False
 
     def hosting_ready(self) -> bool:
         return bool(self._config.get("hosting_ready"))
