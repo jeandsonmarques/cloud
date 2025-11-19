@@ -186,6 +186,7 @@ async def upload_layer_gpkg(
     name: str | None = Form(None),
     description: str | None = Form(None),
     epsg: int | None = Form(None),
+    group_name: str | None = Form(None),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
@@ -252,11 +253,14 @@ async def upload_layer_gpkg(
         if final_srid is not None:
             final_srid = int(final_srid)
 
+        normalized_group = (group_name or "").strip() or None
+
         layer = models.Layer(
             name=safe_display_name,
             provider="gpkg",
             uri=str(relative_uri).replace("\\", "/"),
             description=description,
+            group_name=normalized_group,
             epsg=final_srid,
             srid=final_srid,
             schema=None,

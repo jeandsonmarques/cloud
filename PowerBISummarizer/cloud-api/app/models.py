@@ -39,6 +39,7 @@ class Layer(Base):
     provider = Column(String(50), nullable=False, default="postgis")
     uri = Column(String(1024), nullable=True)
     description = Column(Text, nullable=True)
+    group_name = Column(String(255), nullable=True)
     schema = Column(String(255), nullable=True, default="public")
     srid = Column(Integer, nullable=True)
     epsg = Column(Integer, nullable=True)

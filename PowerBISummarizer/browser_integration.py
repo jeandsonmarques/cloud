@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+from collections import defaultdict
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional
 
@@ -52,12 +54,15 @@ CONNECTION_ICON = ROOT_ICON
 TABLE_ICON = _icon("Table.svg")
 OFFLINE_ICON = QgsApplication.getThemeIcon("/mIconDisconnected.svg")
 CLOUD_ICON = _icon("cloud.svg")
+GROUP_ICON = QgsApplication.getThemeIcon("/mIconFolder.svg")
 if CLOUD_ICON.isNull():
     fallback_cloud = QgsApplication.getThemeIcon("/mIconCloud.svg")
     if not fallback_cloud.isNull():
         CLOUD_ICON = fallback_cloud
 if CLOUD_ICON.isNull():
     CLOUD_ICON = ROOT_ICON
+if GROUP_ICON.isNull():
+    GROUP_ICON = CONNECTION_ICON
 ROOT_PATH = "/PowerBISummarizer"
 _CLOUD_NODE_LOGGED = False
 
@@ -369,6 +374,26 @@ class PowerBICloudPlaceholderItem(QgsDataCollectionItem):
         return []
 
 
+class PowerBICloudGroupItem(QgsDataCollectionItem):
+    """Represents a logical group/folder for Cloud layers."""
+
+    def __init__(self, parent: QgsDataItem, group_name: str, layers: List[Dict]):
+        display = group_name or "Sem Grupo"
+        safe_segment = re.sub(r"[^A-Za-z0-9_.-]+", "_", display).strip("_") or "sem_grupo"
+        path = f"{parent.path()}/{safe_segment}"
+        super().__init__(parent, display, path, PowerBISummarizerBrowserProvider.PROVIDER_NAME)
+        self._layers = list(layers)
+        self.setIcon(GROUP_ICON)
+
+    def createChildren(self) -> List[QgsDataItem]:
+        items: List[QgsDataItem] = []
+        for layer in sorted(self._layers, key=lambda payload: (payload.get("name") or "").lower()):
+            items.append(PowerBICloudLayerItem(self, layer))
+        if not items:
+            return [PowerBICloudPlaceholderItem(self)]
+        return items
+
+
 class PowerBICloudConnectionItem(QgsDataCollectionItem):
     """Represents each mock Cloud connection within the browser."""
 
@@ -384,9 +409,13 @@ class PowerBICloudConnectionItem(QgsDataCollectionItem):
         layers = self.meta.get("layers") or []
         if not layers:
             return [PowerBICloudPlaceholderItem(self)]
-        items: List[QgsDataItem] = []
+        grouped: Dict[str, List[Dict]] = defaultdict(list)
         for layer in layers:
-            items.append(PowerBICloudLayerItem(self, layer))
+            key = (layer.get("group_name") or "").strip()
+            grouped[key].append(layer)
+        items: List[QgsDataItem] = []
+        for group_key in sorted(grouped.keys(), key=lambda value: (value == "", value.lower())):
+            items.append(PowerBICloudGroupItem(self, group_key, grouped[group_key]))
         return items
 
     def actions(self, parent: Optional[QWidget]) -> List[QAction]:

@@ -45,6 +45,7 @@ class PowerBICloudDialog(SlimDialogBase):
         self._update_config_ui()
         self._on_layers_changed()
         self._refresh_upload_layers()
+        self._refresh_group_choices()
         self._select_initial_tab(initial_tab)
 
     # ------------------------------------------------------------------ UI
@@ -220,6 +221,10 @@ class PowerBICloudDialog(SlimDialogBase):
         self.upload_desc_edit = QLineEdit(upload_tab)
         self.upload_desc_edit.setPlaceholderText("Descricao curta (opcional)")
         upload_form.addRow("Descricao (opcional)", self.upload_desc_edit)
+        self.upload_group_combo = QComboBox(upload_tab)
+        self.upload_group_combo.setEditable(True)
+        self.upload_group_combo.setInsertPolicy(QComboBox.NoInsert)
+        upload_form.addRow("Grupo / Pasta da camada (opcional)", self.upload_group_combo)
 
         upload_layout.addLayout(upload_form)
 
@@ -449,6 +454,26 @@ class PowerBICloudDialog(SlimDialogBase):
         else:
             self._set_upload_status("", level="info")
 
+    def _refresh_group_choices(self):
+        if not hasattr(self, "upload_group_combo"):
+            return
+        groups = cloud_session.cloud_group_names()
+        current_text = self.upload_group_combo.currentText()
+        self.upload_group_combo.blockSignals(True)
+        self.upload_group_combo.clear()
+        self.upload_group_combo.addItem("Sem grupo", "")
+        for group in groups:
+            self.upload_group_combo.addItem(group, group)
+        if current_text:
+            idx = self.upload_group_combo.findText(current_text, Qt.MatchFixedString)
+            if idx >= 0:
+                self.upload_group_combo.setCurrentIndex(idx)
+            else:
+                self.upload_group_combo.setEditText(current_text)
+        else:
+            self.upload_group_combo.setCurrentIndex(0)
+        self.upload_group_combo.blockSignals(False)
+
     def _prefill_upload_name(self):
         layer = self._current_upload_layer()
         if layer is None:
@@ -468,6 +493,17 @@ class PowerBICloudDialog(SlimDialogBase):
         if 0 <= idx < len(self._upload_layers):
             return self._upload_layers[idx]
         return None
+
+    def _selected_group_name(self) -> Optional[str]:
+        if not hasattr(self, "upload_group_combo"):
+            return None
+        data_value = self.upload_group_combo.currentData()
+        if isinstance(data_value, str):
+            candidate = data_value
+        else:
+            candidate = self.upload_group_combo.currentText()
+        candidate = (candidate or "").strip()
+        return candidate or None
 
     def _set_upload_status(self, text: str, level: str = "info"):
         colors = {"info": "#5D5A58", "ok": "#2F8D46", "error": "#B3261E"}
@@ -495,6 +531,7 @@ class PowerBICloudDialog(SlimDialogBase):
 
         layer_name = self.upload_name_edit.text().strip() or layer.name() or "camada"
         description = self.upload_desc_edit.text().strip()
+        group_name_value = self._selected_group_name()
 
         epsg = None
         try:
@@ -537,6 +574,7 @@ class PowerBICloudDialog(SlimDialogBase):
                     name=layer_name,
                     description=description,
                     epsg=epsg,
+                    group_name=group_name_value,
                 )
             except RuntimeError:
                 self._set_upload_status("Erro de comunicacao com o Cloud ao enviar camada.", level="error")
@@ -635,6 +673,7 @@ class PowerBICloudDialog(SlimDialogBase):
         stamp = QDateTime.currentDateTime().toString("dd/MM HH:mm")
         self.last_sync_label.setText(stamp)
         self._refresh_upload_layers()
+        self._refresh_group_choices()
 
     def _get_connection_registry(self):
         """Import lazy evita ciclo com browser_integration."""

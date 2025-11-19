@@ -41,6 +41,7 @@ class CloudLayer:
     source: str
     geometry: str = ""
     provider: str = "ogr"
+    group_name: Optional[str] = None
     tags: Optional[List[str]] = None
     mock_only: bool = True
 
@@ -54,6 +55,8 @@ class CloudLayer:
             "provider": self.provider,
             "mock_only": self.mock_only,
         }
+        if self.group_name:
+            payload["group_name"] = self.group_name
         if self.tags:
             payload["tags"] = list(self.tags)
         return payload
@@ -657,6 +660,7 @@ class PowerBICloudSession(QObject):
         name: str,
         description: str = "",
         epsg: Optional[int] = None,
+        group_name: Optional[str] = None,
     ) -> Tuple[int, Dict]:
         """Envia um GPKG real para /api/v1/admin/upload-layer-gpkg usando o token atual."""
         if requests is None:
@@ -670,6 +674,8 @@ class PowerBICloudSession(QObject):
             data["description"] = description
         if epsg is not None:
             data["epsg"] = str(epsg)
+        if group_name:
+            data["group_name"] = group_name
 
         with open(file_path, "rb") as handler:
             files = {"file": (os.path.basename(file_path), handler, "application/octet-stream")}
@@ -724,6 +730,7 @@ class PowerBICloudSession(QObject):
             raw_provider = (item.get("provider") or "postgres").lower()
             geometry = str(item.get("geom_type") or item.get("geometry") or "")
             layer_id = item.get("id") or name
+            group_name_value = (item.get("group_name") or "").strip()
 
             # Resolve origem conforme provider
             source = ""
@@ -771,6 +778,7 @@ class PowerBICloudSession(QObject):
                 source=source,
                 geometry=geometry,
                 provider=provider_key,
+                group_name=group_name_value or None,
                 mock_only=False,
                 tags=tags,
             ).as_dict()
@@ -781,6 +789,8 @@ class PowerBICloudSession(QObject):
                 layer["srid"] = item.get("epsg")
             layer["provider_raw"] = raw_provider
             layer["uri"] = item.get("uri")
+            if group_name_value:
+                layer["group_name"] = group_name_value
             layers.append(layer)
         connection = {
             "id": "powerbi_cloud_remote",
@@ -835,6 +845,22 @@ class PowerBICloudSession(QObject):
 
     def cloud_connections(self) -> List[Dict]:
         return [dict(item) for item in self._connections]
+
+    def cloud_group_names(self) -> List[str]:
+        groups: List[str] = []
+        seen = set()
+        for connection in self._connections:
+            for layer in connection.get("layers", []):
+                name = (layer.get("group_name") or "").strip()
+                if not name:
+                    continue
+                key = name.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                groups.append(name)
+        groups.sort(key=lambda value: value.lower())
+        return groups
 
     def login(self, username: str, password: str) -> Dict:
         username = (username or "").strip()
