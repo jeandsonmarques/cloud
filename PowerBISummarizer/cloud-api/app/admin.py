@@ -1,3 +1,4 @@
+import logging
 import re
 import sqlite3
 from dataclasses import dataclass
@@ -17,6 +18,7 @@ from app.db import get_db
 
 admin_router = APIRouter(prefix="/admin", tags=["admin"])
 _INVALID_FILENAME_CHARS = re.compile(r"[^A-Za-z0-9_.-]+")
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -243,19 +245,22 @@ async def upload_layer_gpkg(
 
         metadata = _extract_gpkg_metadata(target_path)
         detected_srid = metadata.srid
+        logger.info(f"[UPLOAD GPKG] epsg_form={epsg}, srid_from_gpkg={detected_srid}")
         if detected_srid is None and epsg is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Nao foi possivel determinar o SRID do arquivo GPKG. Informe um EPSG valido.",
             )
-        if detected_srid is not None and epsg is not None and detected_srid != epsg:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="O EPSG informado nao corresponde ao SRID do arquivo GPKG.",
-            )
-        final_srid = detected_srid or epsg
-        if final_srid is not None:
-            final_srid = int(final_srid)
+        if detected_srid is not None:
+            final_srid = int(detected_srid)
+            if epsg is not None and int(epsg) != final_srid:
+                logger.warning(
+                    "[UPLOAD GPKG] EPSG informado %s difere do SRID %s. Usando SRID do arquivo.",
+                    epsg,
+                    detected_srid,
+                )
+        else:
+            final_srid = int(epsg) if epsg is not None else None
 
         normalized_group = (group_name or "").strip() or None
 
