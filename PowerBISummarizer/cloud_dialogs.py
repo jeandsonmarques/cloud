@@ -495,15 +495,18 @@ class PowerBICloudDialog(SlimDialogBase):
         return None
 
     def _selected_group_name(self) -> str:
-        if not hasattr(self, "upload_group_combo"):
+        widget = getattr(self, "upload_group_combo", None)
+        if widget is None:
             return ""
-        data_value = self.upload_group_combo.currentData()
+        text = ""
+        data_value = widget.currentData()
         if isinstance(data_value, str):
-            candidate = data_value
+            text = data_value
+        elif widget.isEditable() and widget.lineEdit() is not None:
+            text = widget.lineEdit().text()
         else:
-            candidate = self.upload_group_combo.currentText()
-        candidate = (candidate or "").strip()
-        return candidate
+            text = widget.currentText()
+        return (text or "").strip()
 
     def _set_upload_status(self, text: str, level: str = "info"):
         colors = {"info": "#5D5A58", "ok": "#2F8D46", "error": "#B3261E"}
