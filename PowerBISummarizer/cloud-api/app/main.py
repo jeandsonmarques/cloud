@@ -81,11 +81,9 @@ def _resolve_user_from_request(
     parametro de query "token" (usado pelo plugin ao baixar GPKG).
     """
     auth_header = request.headers.get("Authorization") or ""
-    token_value = None
-    if auth_header.lower().startswith("bearer "):
+    token_value = (token_query or "").strip()
+    if not token_value and auth_header.lower().startswith("bearer "):
         token_value = auth_header.split(" ", 1)[1].strip()
-    elif token_query:
-        token_value = token_query.strip()
 
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
