@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from qgis.PyQt.QtCore import QObject, QDateTime, QSettings, Qt, pyqtSignal
-from qgis.core import QgsDataSourceUri
+from qgis.core import Qgis, QgsDataSourceUri, QgsMessageLog
 
 try:  # pragma: no cover - QGIS ships requests by default
     import requests
@@ -54,6 +54,36 @@ class CloudLayer:
         if self.tags:
             payload["tags"] = list(self.tags)
         return payload
+
+
+def build_gpkg_vsicurl_path(
+    base_url: str,
+    layers_endpoint: str,
+    layer_id: Any,
+    token: str,
+) -> Tuple[str, str]:
+    """
+    Returns the download URL and the /vsicurl/ path used by GDAL to fetch remote GPKG layers.
+    """
+    clean_base_url = (base_url or "").strip().replace("\\", "/")
+    clean_endpoint = (layers_endpoint or "/api/v1/layers").strip() or "/api/v1/layers"
+    clean_endpoint = clean_endpoint.rstrip("/").replace("\\", "/")
+    identifier = str(layer_id)
+
+    download_endpoint = f"{clean_endpoint}/{identifier}/download-gpkg"
+    if token:
+        download_endpoint = f"{download_endpoint}?token={token}"
+
+    if download_endpoint.startswith("http://") or download_endpoint.startswith("https://"):
+        download_url = download_endpoint
+    else:
+        if not clean_base_url:
+            raise ValueError("Base URL do PowerBI Cloud nao esta configurada.")
+        download_endpoint = download_endpoint.lstrip("/")
+        download_url = f"{clean_base_url.rstrip('/')}/{download_endpoint}"
+
+    vsicurl_path = f"/vsicurl/{download_url}"
+    return download_url, vsicurl_path
 
 
 class PowerBICloudSession(QObject):
@@ -426,6 +456,7 @@ class PowerBICloudSession(QObject):
         conn_meta = self._cloud_connection_meta()
         layers_endpoint = (self._config.get("layers_endpoint") or "/api/v1/layers").strip() or "/api/v1/layers"
         layers_endpoint = layers_endpoint.rstrip("/")
+        base_url = self._config.get("base_url") or ""
         token = self._session.get("token") or ""
         for item in payload:
             if not isinstance(item, dict):
@@ -442,12 +473,19 @@ class PowerBICloudSession(QObject):
             provider_key = "ogr"
             tags = ["cloud", schema_name]
             if raw_provider == "gpkg":
-                download_endpoint = f"{layers_endpoint}/{layer_id}/download-gpkg"
-                if token:
-                    download_endpoint = f"{download_endpoint}?token={token}"
-                download_url = self._build_url(download_endpoint)
+                download_url, vsicurl_path = build_gpkg_vsicurl_path(base_url, layers_endpoint, layer_id, token)
+                QgsMessageLog.logMessage(
+                    f"PowerBI Cloud GPKG URL: {download_url}",
+                    "PowerBI Summarizer",
+                    Qgis.Info,
+                )
+                QgsMessageLog.logMessage(
+                    f"PowerBI Cloud VSICURL path: {vsicurl_path}",
+                    "PowerBI Summarizer",
+                    Qgis.Info,
+                )
                 # GDAL suporta HTTP via /vsicurl
-                source = f"/vsicurl/{download_url}"
+                source = vsicurl_path
                 provider_key = "ogr"
                 print(f"[PowerBI Cloud] Camada {name} (GPKG) URL: {download_url}")
             elif raw_provider in ("postgres", "postgis"):
