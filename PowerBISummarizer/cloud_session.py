@@ -528,6 +528,11 @@ class PowerBICloudSession(QObject):
                     "PowerBI Summarizer",
                     Qgis.Info,
                 )
+                QgsMessageLog.logMessage(
+                    f"PowerBI Cloud FINAL SOURCE (repr): {vsicurl_path!r}",
+                    "PowerBI Summarizer",
+                    Qgis.Info,
+                )
                 # GDAL suporta HTTP via /vsicurl
                 source = vsicurl_path
                 provider_key = "ogr"

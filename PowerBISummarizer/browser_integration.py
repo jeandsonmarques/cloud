@@ -423,7 +423,15 @@ class PowerBICloudLayerItem(QgsLayerItem):
         layer_id = self.meta.get("id") or f"layer_{id(self)}"
         name = self.meta.get("name") or layer_id
         path = f"{parent.path()}/{layer_id}"
-        source = os.path.normpath(self.meta.get("source") or "")
+        raw_source = self.meta.get("source") or ""
+        provider = (self.meta.get("provider") or "ogr").lower()
+        provider_raw = (self.meta.get("provider_raw") or provider).lower()
+        if provider_raw == "gpkg" and raw_source.startswith("/vsicurl/"):
+            source = raw_source
+        else:
+            source = os.path.normpath(raw_source) if raw_source else ""
+        if provider_raw == "gpkg":
+            print(f"[PowerBI Cloud] Layer item using source (repr): {source!r}")
         provider = self.meta.get("provider") or "ogr"
         layer_type = Qgis.BrowserLayerType.Vector
         super().__init__(parent, name, path, source, layer_type, provider)
