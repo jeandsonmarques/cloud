@@ -674,7 +674,7 @@ class PowerBICloudSession(QObject):
             data["epsg"] = str(epsg)
         data["group_name"] = group_name or ""
         QgsMessageLog.logMessage(
-            f"[PowerBI Cloud] Enviando upload GPKG com group_name={group_name!r}",
+            f"PowerBI Cloud| Enviando upload GPKG com group_name={group_name!r}",
             "PowerBI Summarizer",
             Qgis.Info,
         )

@@ -494,16 +494,16 @@ class PowerBICloudDialog(SlimDialogBase):
             return self._upload_layers[idx]
         return None
 
-    def _selected_group_name(self) -> Optional[str]:
+    def _selected_group_name(self) -> str:
         if not hasattr(self, "upload_group_combo"):
-            return None
+            return ""
         data_value = self.upload_group_combo.currentData()
         if isinstance(data_value, str):
             candidate = data_value
         else:
             candidate = self.upload_group_combo.currentText()
         candidate = (candidate or "").strip()
-        return candidate or None
+        return candidate
 
     def _set_upload_status(self, text: str, level: str = "info"):
         colors = {"info": "#5D5A58", "ok": "#2F8D46", "error": "#B3261E"}
