@@ -1,6 +1,9 @@
 import re
+import sqlite3
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Optional, Tuple
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
@@ -14,6 +17,16 @@ from app.db import get_db
 
 admin_router = APIRouter(prefix="/admin", tags=["admin"])
 _INVALID_FILENAME_CHARS = re.compile(r"[^A-Za-z0-9_.-]+")
+
+
+@dataclass
+class GpkgMetadata:
+    table_name: str
+    geometry_column: str
+    geometry_type: str
+    srid: Optional[int]
+    identifier: Optional[str] = None
+    extent: Optional[Tuple[float, float, float, float]] = None
 
 
 @admin_router.post(
@@ -76,6 +89,93 @@ def _cleanup_file(path: Path) -> None:
         pass
 
 
+def _extract_gpkg_metadata(path: Path) -> GpkgMetadata:
+    if not path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Arquivo GPKG nao encontrado apos upload.",
+        )
+    try:
+        conn = sqlite3.connect(path)
+    except sqlite3.Error as exc:  # pragma: no cover - SQLite failure
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Nao foi possivel abrir o arquivo GPKG enviado.",
+        ) from exc
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT
+                g.table_name,
+                g.column_name,
+                g.geometry_type_name,
+                s.organization,
+                s.organization_coordsys_id,
+                g.srs_id
+            FROM gpkg_geometry_columns g
+            LEFT JOIN gpkg_spatial_ref_sys s ON g.srs_id = s.srs_id
+            ORDER BY g.table_name
+            """
+        )
+        rows = cursor.fetchall()
+        if not rows:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="O arquivo GPKG nao possui colunas de geometria.",
+            )
+        table_name, geom_column, geom_type, org, org_srid, fallback_srid = rows[0]
+        srid: Optional[int] = None
+        if org and org.upper() == "EPSG" and org_srid is not None:
+            srid = int(org_srid)
+        elif fallback_srid is not None:
+            srid = int(fallback_srid)
+        cursor.execute(
+            """
+            SELECT
+                identifier,
+                min_x,
+                min_y,
+                max_x,
+                max_y
+            FROM gpkg_contents
+            WHERE table_name = ?
+            """,
+            (table_name,),
+        )
+        contents = cursor.fetchone()
+        identifier = table_name
+        extent: Optional[Tuple[float, float, float, float]] = None
+        if contents:
+            identifier = contents[0] or table_name
+            bounds = contents[1:]
+            if all(value is not None for value in bounds):
+                extent = tuple(float(value) for value in bounds)  # type: ignore[arg-type]
+    except sqlite3.Error as exc:  # pragma: no cover - SQLite failure
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Nao foi possivel ler os metadados do GPKG.",
+        ) from exc
+    finally:
+        conn.close()
+
+    geom_type_name = (geom_type or "").upper().strip()
+    if not geom_type_name or not geom_column:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Nao foi possivel identificar o tipo de geometria do arquivo GPKG.",
+        )
+    return GpkgMetadata(
+        table_name=table_name,
+        geometry_column=geom_column,
+        geometry_type=geom_type_name,
+        srid=srid,
+        identifier=identifier,
+        extent=extent,
+    )
+
+
 @admin_router.post(
     "/upload-layer-gpkg",
     response_model=schemas.LayerOut,
@@ -136,15 +236,31 @@ async def upload_layer_gpkg(
                     break
                 out_file.write(chunk)
 
+        metadata = _extract_gpkg_metadata(target_path)
+        detected_srid = metadata.srid
+        if detected_srid is None and epsg is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Nao foi possivel determinar o SRID do arquivo GPKG. Informe um EPSG valido.",
+            )
+        if detected_srid is not None and epsg is not None and detected_srid != epsg:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="O EPSG informado nao corresponde ao SRID do arquivo GPKG.",
+            )
+        final_srid = detected_srid or epsg
+        if final_srid is not None:
+            final_srid = int(final_srid)
+
         layer = models.Layer(
             name=safe_display_name,
             provider="gpkg",
             uri=str(relative_uri).replace("\\", "/"),
             description=description,
-            epsg=epsg,
-            srid=epsg,
+            epsg=final_srid,
+            srid=final_srid,
             schema=None,
-            geom_type=None,
+            geom_type=metadata.geometry_type,
             created_by_user_id=current_user.id,
         )
         db.add(layer)
