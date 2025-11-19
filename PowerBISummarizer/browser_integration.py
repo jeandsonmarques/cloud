@@ -453,6 +453,11 @@ class PowerBICloudLayerItem(QgsLayerItem):
         warn_action.triggered.connect(self._warn_real_access)
         actions.append(warn_action)
 
+        if self._can_delete_layer():
+            delete_action = QAction("Gerenciar → Deletar Camada", widget)
+            delete_action.triggered.connect(self._delete_layer)
+            actions.append(delete_action)
+
         return actions
 
     def _warn_real_access(self):
@@ -462,6 +467,53 @@ class PowerBICloudLayerItem(QgsLayerItem):
             message = "Cloud em preparação. Apenas camadas mock locais estão disponíveis no momento."
         QMessageBox.information(None, "PowerBI Cloud", message)
 
+
+    def _can_delete_layer(self) -> bool:
+        if self.meta.get("mock_only", True):
+            return False
+        provider_raw = (self.meta.get("provider_raw") or self.meta.get("provider") or "").lower()
+        if provider_raw != "gpkg":
+            return False
+        return cloud_session.is_authenticated() and cloud_session.is_admin()
+
+    def _delete_layer(self):
+        layer_id = self.meta.get("id")
+        if not layer_id:
+            QMessageBox.warning(None, "PowerBI Cloud", "Identificador da camada invalido.")
+            return
+        layer_name = self.meta.get("name") or str(layer_id)
+        confirm = QMessageBox.question(
+            None,
+            "PowerBI Cloud",
+            f"Tem certeza que deseja excluir a camada '{layer_name}'?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if confirm != QMessageBox.Yes:
+            return
+        QgsMessageLog.logMessage(
+            f"PowerBI Cloud solicitando exclusao da camada {layer_name} (id={layer_id})",
+            "PowerBI Summarizer",
+            Qgis.Info,
+        )
+        try:
+            cloud_session.delete_cloud_layer(layer_id)
+        except Exception as exc:
+            QgsMessageLog.logMessage(
+                f"PowerBI Cloud falha ao excluir camada {layer_name}: {exc}",
+                "PowerBI Summarizer",
+                Qgis.Warning,
+            )
+            QMessageBox.warning(None, "PowerBI Cloud", f"Falha ao excluir camada:\n{exc}")
+            return
+        cloud_session.reload_mock_layers()
+        _refresh_browser_model()
+        QgsMessageLog.logMessage(
+            f"PowerBI Cloud camada {layer_name} excluida com sucesso.",
+            "PowerBI Summarizer",
+            Qgis.Info,
+        )
+        QMessageBox.information(None, "PowerBI Cloud", f"Camada '{layer_name}' foi excluida com sucesso.")
 
 class PowerBIPlaceholderItem(QgsDataCollectionItem):
     """Displayed when there are no saved connections."""

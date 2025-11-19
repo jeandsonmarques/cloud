@@ -166,6 +166,53 @@ def download_layer_gpkg(
     )
 
 
+@api_router.delete("/layers/{layer_id}")
+def delete_layer(
+    layer_id: int,
+    request: Request,
+    token: Optional[str] = None,
+    db_session: Session = Depends(db.get_db),
+):
+    """
+    Remove um registro de camada e seu arquivo GPKG associado (quando aplicável).
+    Disponível apenas para administradores autenticados.
+    """
+    user = _resolve_user_from_request(request, db_session, token_query=token)
+    if not user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Apenas admins podem excluir camadas.",
+        )
+
+    layer = db_session.query(models.Layer).filter(models.Layer.id == layer_id).first()
+    if layer is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Camada nao encontrada.")
+
+    provider = (layer.provider or "").lower()
+    if provider == "gpkg" and layer.uri:
+        base_dir = UPLOAD_DIR.resolve()
+        target_path = (UPLOAD_DIR / layer.uri).resolve()
+        try:
+            target_path.relative_to(base_dir)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Caminho do arquivo invalido.",
+            )
+        if target_path.exists():
+            try:
+                target_path.unlink()
+            except OSError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Falha ao remover arquivo GPKG: {exc}",
+                )
+
+    db_session.delete(layer)
+    db_session.commit()
+    return {"status": "ok"}
+
+
 app.include_router(api_router, prefix=API_BASEPATH)
 app.include_router(
     admin_router,

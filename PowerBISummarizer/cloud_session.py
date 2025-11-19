@@ -584,6 +584,18 @@ class PowerBICloudSession(QObject):
         return [connection]
 
     # ------------------------------------------------------------------ Public API
+    def delete_cloud_layer(self, layer_id: Any) -> Dict:
+        if requests is None:
+            raise RuntimeError("O modulo 'requests' nao esta disponivel no ambiente do QGIS.")
+        if not self._should_use_remote_layers():
+            raise RuntimeError("Exclusao remota disponivel apenas quando conectado ao Cloud real.")
+        identifier = str(layer_id).strip()
+        if not identifier:
+            raise ValueError("Identificador da camada invalido.")
+        endpoint = f"/layers/{identifier}"
+        payload = self._request_json("DELETE", endpoint, headers=self._auth_headers())
+        return payload if isinstance(payload, dict) else {}
+
     def is_authenticated(self) -> bool:
         token = self._session.get("token")
         if not token:
