@@ -1,8 +1,11 @@
 import os
-from typing import List
+from pathlib import Path
+from typing import List, Optional
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, status
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 
 from app.admin import admin_router
@@ -66,6 +69,105 @@ def list_layers(
 ):
     layers = db_session.query(models.Layer).order_by(models.Layer.name.asc()).all()
     return layers
+
+
+def _resolve_user_from_request(
+    request: Request,
+    db_session: Session,
+    token_query: Optional[str] = None,
+) -> models.User:
+    """
+    Resolve o usuario autenticado a partir do header Authorization ou do
+    parametro de query "token" (usado pelo plugin ao baixar GPKG).
+    """
+    auth_header = request.headers.get("Authorization") or ""
+    token_value = None
+    if auth_header.lower().startswith("bearer "):
+        token_value = auth_header.split(" ", 1)[1].strip()
+    elif token_query:
+        token_value = token_query.strip()
+
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    if not token_value:
+        raise credentials_exception
+
+    try:
+        payload = jwt.decode(token_value, auth.JWT_SECRET, algorithms=[auth.JWT_ALGORITHM])
+        subject: Optional[str] = payload.get("sub")
+        if subject is None:
+            raise credentials_exception
+    except JWTError as exc:  # pragma: no cover - jose libera detalhes
+        raise credentials_exception from exc
+
+    user = db_session.query(models.User).filter(models.User.id == int(subject)).first()
+    if user is None:
+        raise credentials_exception
+    return user
+
+
+@api_router.get("/layers/{layer_id}/download-gpkg")
+def download_layer_gpkg(
+    layer_id: int,
+    request: Request,
+    token: Optional[str] = None,
+    db_session: Session = Depends(db.get_db),
+):
+    """
+    Faz download do GPKG salvo em UPLOAD_DIR para camadas com provider='gpkg'.
+    Protegido por autenticacao (Bearer header ou query param ?token=...).
+    """
+    _resolve_user_from_request(request, db_session, token_query=token)
+
+    layer = db_session.query(models.Layer).filter(models.Layer.id == layer_id).first()
+    if layer is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Camada nao encontrada")
+    if (layer.provider or "").lower() != "gpkg":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Download disponivel apenas para camadas GPKG.",
+        )
+    if not layer.uri:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Caminho do GPKG nao registrado para esta camada.",
+        )
+
+    base_dir = UPLOAD_DIR.resolve()
+    target_path = (UPLOAD_DIR / layer.uri).resolve()
+    try:
+        target_path.relative_to(base_dir)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Caminho do arquivo invalido.",
+        )
+
+    if not target_path.exists() or not target_path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Arquivo GPKG nao encontrado.",
+        )
+
+    filename = Path(layer.uri).name or f"layer_{layer_id}.gpkg"
+
+    def _iter_file(path: Path):
+        with path.open("rb") as file_handler:
+            while True:
+                chunk = file_handler.read(1024 * 1024)
+                if not chunk:
+                    break
+                yield chunk
+
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    return StreamingResponse(
+        _iter_file(target_path),
+        media_type="application/geopackage+sqlite3",
+        headers=headers,
+    )
 
 
 app.include_router(api_router, prefix=API_BASEPATH)

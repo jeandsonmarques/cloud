@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from qgis.PyQt.QtCore import QObject, QDateTime, QSettings, Qt, pyqtSignal
+from qgis.core import QgsDataSourceUri
 
 try:  # pragma: no cover - QGIS ships requests by default
     import requests
@@ -186,6 +187,53 @@ class PowerBICloudSession(QObject):
             layers.append(sanitized)
         raw["layers"] = layers
         return raw
+
+    def _cloud_connection_meta(self) -> Optional[Dict]:
+        """Recupera a conexão ativa/salva para montar camadas PostGIS reais."""
+        try:
+            from .browser_integration import connection_registry
+        except Exception:
+            return None
+
+        connections = connection_registry.all_connections()
+        fingerprint = self.active_connection_fingerprint()
+        if fingerprint:
+            for conn in connections:
+                if conn.get("fingerprint") == fingerprint:
+                    return conn
+        return connections[0] if connections else None
+
+    def _build_postgis_source(self, conn: Optional[Dict], layer_payload: Dict) -> Optional[str]:
+        """Monta a string de conexão PostGIS a partir da conexão salva."""
+        if not conn:
+            print("[PowerBI Cloud] Nenhuma conexão ativa configurada para PostGIS.")
+            return None
+
+        uri = QgsDataSourceUri()
+        service = conn.get("service")
+        password = conn.get("password", "")
+        database = conn.get("database", "")
+        user = conn.get("user", "")
+        host = conn.get("host", "")
+        port = str(conn.get("port") or "")
+        if service:
+            uri.setConnection(service, database, user, password)
+        else:
+            uri.setConnection(host, port, database, user, password)
+        authcfg = conn.get("authcfg")
+        if authcfg:
+            uri.setAuthConfigId(authcfg)
+
+        schema = layer_payload.get("schema") or layer_payload.get("schema_name") or "public"
+        table = layer_payload.get("name") or layer_payload.get("table") or layer_payload.get("id") or "layer"
+        geom_column = (
+            layer_payload.get("geometry_column")
+            or layer_payload.get("geom_column")
+            or "geom"
+        )
+        pk_column = layer_payload.get("pk_column") or "id"
+        uri.setDataSource(schema, table, geom_column, "", pk_column)
+        return uri.uri(False)
 
     def _build_url(self, endpoint: Optional[str]) -> str:
         endpoint = (endpoint or "").strip()
@@ -375,25 +423,64 @@ class PowerBICloudSession(QObject):
         if not isinstance(payload, list):
             raise RuntimeError("Resposta invalida do endpoint de camadas.")
         layers: List[Dict] = []
+        conn_meta = self._cloud_connection_meta()
+        layers_endpoint = (self._config.get("layers_endpoint") or "/api/v1/layers").strip() or "/api/v1/layers"
+        layers_endpoint = layers_endpoint.rstrip("/")
+        token = self._session.get("token") or ""
         for item in payload:
             if not isinstance(item, dict):
                 continue
             schema_name = item.get("schema") or item.get("schema_name") or "public"
             name = item.get("name") or f"camada_{item.get('id') or uuid.uuid4().hex[:4]}"
             srid = item.get("srid")
+            raw_provider = (item.get("provider") or "postgres").lower()
+            geometry = str(item.get("geom_type") or item.get("geometry") or "")
+            layer_id = item.get("id") or name
+
+            # Resolve origem conforme provider
+            source = ""
+            provider_key = "ogr"
+            tags = ["cloud", schema_name]
+            if raw_provider == "gpkg":
+                download_endpoint = f"{layers_endpoint}/{layer_id}/download-gpkg"
+                if token:
+                    download_endpoint = f"{download_endpoint}?token={token}"
+                download_url = self._build_url(download_endpoint)
+                # GDAL suporta HTTP via /vsicurl
+                source = f"/vsicurl/{download_url}"
+                provider_key = "ogr"
+                print(f"[PowerBI Cloud] Camada {name} (GPKG) URL: {download_url}")
+            elif raw_provider in ("postgres", "postgis"):
+                source = self._build_postgis_source(conn_meta, {**item, "schema": schema_name, "name": name})
+                provider_key = "postgres"
+                tags.append("postgis")
+                if source and conn_meta:
+                    print(f"[PowerBI Cloud] Camada {name} (PostGIS) usando {conn_meta.get('host','')}")
+            else:
+                source = item.get("uri") or item.get("source") or ""
+                provider_key = item.get("provider") or "ogr"
+
+            if not source:
+                print(f"[PowerBI Cloud] Ignorando camada {name}: origem nao resolvida (provider={raw_provider}).")
+                continue
+
             layer = CloudLayer(
-                id=str(item.get("id") or name),
+                id=str(layer_id),
                 name=name,
-                description=f"Schema {schema_name} / SRID {srid or '-'}",
-                source=f"cloud://{schema_name}.{name}",
-                geometry=str(item.get("geom_type") or ""),
-                provider="postgres",
+                description=item.get("description") or f"Schema {schema_name} / SRID {srid or '-'}",
+                source=source,
+                geometry=geometry,
+                provider=provider_key,
                 mock_only=False,
-                tags=["cloud", schema_name],
+                tags=tags,
             ).as_dict()
             layer["schema"] = schema_name
             if srid:
                 layer["srid"] = srid
+            if item.get("epsg") and not layer.get("srid"):
+                layer["srid"] = item.get("epsg")
+            layer["provider_raw"] = raw_provider
+            layer["uri"] = item.get("uri")
             layers.append(layer)
         connection = {
             "id": "powerbi_cloud_remote",
