@@ -4,7 +4,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 
@@ -154,17 +154,13 @@ def download_layer_gpkg(
 
     filename = Path(layer.uri).name or f"layer_{layer_id}.gpkg"
 
-    def _iter_file(path: Path):
-        with path.open("rb") as file_handler:
-            while True:
-                chunk = file_handler.read(1024 * 1024)
-                if not chunk:
-                    break
-                yield chunk
-
-    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
-    return StreamingResponse(
-        _iter_file(target_path),
+    headers = {
+        "Content-Disposition": f'attachment; filename="{filename}"',
+        "Accept-Ranges": "bytes",
+    }
+    return FileResponse(
+        path=target_path,
+        filename=filename,
         media_type="application/geopackage+sqlite3",
         headers=headers,
     )
