@@ -206,10 +206,11 @@ async def upload_layer_gpkg(
     now = datetime.utcnow()
     dated_path = Path(str(now.year), f"{now.month:02}", f"{now.day:02}")
     generated_filename = f"{uuid4().hex}_{safe_stem}.gpkg"
+    base_upload_dir = UPLOAD_DIR.resolve()
     # Evita duplicar subpasta gpkg se UPLOAD_DIR ja termina com gpkg
-    relative_prefix = Path("" if UPLOAD_DIR.name.lower() == "gpkg" else "gpkg")
-    relative_uri = relative_prefix / dated_path / generated_filename
-    target_dir = UPLOAD_DIR / relative_prefix / dated_path
+    relative_prefix = Path("" if base_upload_dir.name.lower() == "gpkg" else "gpkg")
+    relative_uri = (relative_prefix / dated_path / generated_filename).as_posix()
+    target_dir = base_upload_dir / relative_prefix / dated_path
     target_path = target_dir / generated_filename
 
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -236,6 +237,9 @@ async def upload_layer_gpkg(
                 if not chunk:
                     break
                 out_file.write(chunk)
+        print(f"[UPLOAD GPKG] UPLOAD_DIR={base_upload_dir}")
+        print(f"[UPLOAD GPKG] uri salvada no banco={relative_uri}")
+        print(f"[UPLOAD GPKG] caminho completo={target_path}")
 
         metadata = _extract_gpkg_metadata(target_path)
         detected_srid = metadata.srid
@@ -258,7 +262,7 @@ async def upload_layer_gpkg(
         layer = models.Layer(
             name=safe_display_name,
             provider="gpkg",
-            uri=str(relative_uri).replace("\\", "/"),
+            uri=relative_uri,
             description=description,
             group_name=normalized_group,
             epsg=final_srid,

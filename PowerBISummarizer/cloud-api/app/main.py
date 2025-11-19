@@ -135,7 +135,14 @@ def download_layer_gpkg(
         )
 
     base_dir = UPLOAD_DIR.resolve()
-    target_path = (UPLOAD_DIR / layer.uri).resolve()
+    try:
+        relative_path = Path(layer.uri)
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Caminho do arquivo invalido.",
+        )
+    target_path = (base_dir / relative_path).resolve()
     try:
         target_path.relative_to(base_dir)
     except ValueError:
@@ -144,10 +151,15 @@ def download_layer_gpkg(
             detail="Caminho do arquivo invalido.",
         )
 
+    print(f"[DOWNLOAD GPKG] UPLOAD_DIR={base_dir}")
+    print(f"[DOWNLOAD GPKG] uri do layer={layer.uri}")
+    print(f"[DOWNLOAD GPKG] caminho completo={target_path}")
+    print(f"[DOWNLOAD GPKG] existe? {target_path.is_file()}")
+
     if not target_path.exists() or not target_path.is_file():
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Arquivo GPKG nao encontrado.",
+            detail=f"Arquivo GPKG nao encontrado: {target_path}",
         )
 
     filename = Path(layer.uri).name or f"layer_{layer_id}.gpkg"
@@ -189,7 +201,14 @@ def delete_layer(
     provider = (layer.provider or "").lower()
     if provider == "gpkg" and layer.uri:
         base_dir = UPLOAD_DIR.resolve()
-        target_path = (UPLOAD_DIR / layer.uri).resolve()
+        try:
+            relative_path = Path(layer.uri)
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Caminho do arquivo invalido.",
+            )
+        target_path = (base_dir / relative_path).resolve()
         try:
             target_path.relative_to(base_dir)
         except ValueError:
