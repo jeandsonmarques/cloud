@@ -669,13 +669,15 @@ class PowerBICloudSession(QObject):
         headers = dict(self._auth_headers())
         headers.pop("Content-Type", None)  # requests define boundary para multipart
 
-        data: Dict[str, str] = {"name": name}
-        if description:
-            data["description"] = description
+        data: Dict[str, str] = {"name": name, "description": description or ""}
         if epsg is not None:
             data["epsg"] = str(epsg)
-        if group_name is not None:
-            data["group_name"] = group_name
+        data["group_name"] = group_name or ""
+        QgsMessageLog.logMessage(
+            f"[PowerBI Cloud] Enviando upload GPKG com group_name={group_name!r}",
+            "PowerBI Summarizer",
+            Qgis.Info,
+        )
 
         with open(file_path, "rb") as handler:
             files = {"file": (os.path.basename(file_path), handler, "application/octet-stream")}
