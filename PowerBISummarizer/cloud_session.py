@@ -56,6 +56,48 @@ class CloudLayer:
         return payload
 
 
+def sanitize_base_url(value: Optional[str]) -> str:
+    clean = (value or "").strip().replace("\\", "/")
+    if not clean:
+        return ""
+    clean = clean.rstrip("/")
+    marker = "/api/v1"
+    while clean.lower().endswith(f"{marker}{marker}"):
+        clean = clean[: -len(marker)]
+    if marker not in clean.lower():
+        clean = f"{clean}{marker}"
+    return clean
+
+
+def sanitize_layers_endpoint(value: Optional[str]) -> str:
+    clean = (value or "layers").strip().replace("\\", "/")
+    clean = clean.strip("/")
+    prefix = "api/v1/"
+    if clean.lower().startswith(prefix):
+        clean = clean[len(prefix) :]
+    elif clean.lower() == "api/v1":
+        clean = "layers"
+    if not clean:
+        clean = "layers"
+    return clean
+
+
+def sanitize_login_endpoint(value: Optional[str]) -> str:
+    clean = (value or "/login").strip().replace("\\", "/")
+    if not clean:
+        clean = "/login"
+    if not clean.startswith("/"):
+        clean = f"/{clean}"
+    prefix = "/api/v1"
+    if clean.lower().startswith(prefix):
+        clean = clean[len(prefix) :]
+        if not clean.startswith("/"):
+            clean = f"/{clean}"
+    if not clean:
+        clean = "/login"
+    return clean
+
+
 def build_gpkg_vsicurl_path(
     base_url: str,
     layers_endpoint: str,
@@ -65,23 +107,18 @@ def build_gpkg_vsicurl_path(
     """
     Returns the download URL and the /vsicurl/ path used by GDAL to fetch remote GPKG layers.
     """
-    clean_base_url = (base_url or "").strip().replace("\\", "/")
-    clean_endpoint = (layers_endpoint or "/api/v1/layers").strip() or "/api/v1/layers"
-    clean_endpoint = clean_endpoint.rstrip("/").replace("\\", "/")
+    clean_base_url = sanitize_base_url(base_url)
+    clean_endpoint = sanitize_layers_endpoint(layers_endpoint)
     identifier = str(layer_id)
-
-    download_endpoint = f"{clean_endpoint}/{identifier}/download-gpkg"
+    if not clean_base_url:
+        raise ValueError("Base URL do PowerBI Cloud nao esta configurada.")
+    if not (clean_base_url.startswith("http://") or clean_base_url.startswith("https://")):
+        raise ValueError("Base URL do PowerBI Cloud deve comecar com http:// ou https://.")
+    if not identifier:
+        raise ValueError("ID da camada invalido para download GPKG.")
+    download_url = f"{clean_base_url.rstrip('/')}/{clean_endpoint}/{identifier}/download-gpkg"
     if token:
-        download_endpoint = f"{download_endpoint}?token={token}"
-
-    if download_endpoint.startswith("http://") or download_endpoint.startswith("https://"):
-        download_url = download_endpoint
-    else:
-        if not clean_base_url:
-            raise ValueError("Base URL do PowerBI Cloud nao esta configurada.")
-        download_endpoint = download_endpoint.lstrip("/")
-        download_url = f"{clean_base_url.rstrip('/')}/{download_endpoint}"
-
+        download_url = f"{download_url}?token={token}"
     vsicurl_path = f"/vsicurl/{download_url}"
     return download_url, vsicurl_path
 
@@ -127,9 +164,9 @@ class PowerBICloudSession(QObject):
 
     def _default_config(self) -> Dict:
         return {
-            "base_url": "https://cloud.powerbisummarizer.dev",
-            "login_endpoint": "/api/v1/login",
-            "layers_endpoint": "/api/v1/layers",
+            "base_url": sanitize_base_url("https://cloud.powerbisummarizer.dev/api/v1"),
+            "login_endpoint": "/login",
+            "layers_endpoint": sanitize_layers_endpoint("layers"),
             "hosting_ready": False,
         }
 
@@ -141,6 +178,9 @@ class PowerBICloudSession(QObject):
                 if isinstance(payload, dict):
                     merged = self._default_config()
                     merged.update(payload)
+                    merged["base_url"] = sanitize_base_url(merged.get("base_url"))
+                    merged["login_endpoint"] = sanitize_login_endpoint(merged.get("login_endpoint"))
+                    merged["layers_endpoint"] = sanitize_layers_endpoint(merged.get("layers_endpoint"))
                     return merged
             except Exception:
                 pass
@@ -266,15 +306,16 @@ class PowerBICloudSession(QObject):
         return uri.uri(False)
 
     def _build_url(self, endpoint: Optional[str]) -> str:
-        endpoint = (endpoint or "").strip()
+        endpoint = (endpoint or "").strip().replace("\\", "/")
         if endpoint.startswith("http://") or endpoint.startswith("https://"):
             return endpoint
-        base_url = (self._config.get("base_url") or "").strip()
+        base_url = sanitize_base_url(self._config.get("base_url"))
         if not base_url:
             raise ValueError("Configure a Base URL valida nas configuracoes do Cloud.")
+        if not (base_url.startswith("http://") or base_url.startswith("https://")):
+            raise ValueError("Configure a Base URL iniciando com http:// ou https://.")
         if not endpoint:
             raise ValueError("Endpoint Cloud invalido.")
-        base_url = base_url.rstrip("/")
         if not endpoint.startswith("/"):
             endpoint = f"/{endpoint}"
         return f"{base_url}{endpoint}"
@@ -312,7 +353,7 @@ class PowerBICloudSession(QObject):
             return {}
         prefix = "Bearer" if (token_type or "").lower() == "bearer" else (token_type or "Bearer").capitalize()
         headers = {"Authorization": f"{prefix} {token}"}
-        url = self._build_url("/api/v1/me")
+        url = self._build_url("/me")
         try:
             response = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
             response.raise_for_status()
@@ -387,7 +428,7 @@ class PowerBICloudSession(QObject):
         if requests is None:
             raise RuntimeError("O modulo 'requests' nao esta disponivel no ambiente do QGIS.")
         # Chamada direta para /api/v1/admin/create-user usando o token atual.
-        url = self._build_url("/api/v1/admin/create-user")
+        url = self._build_url("/admin/create-user")
         headers = dict(self._auth_headers())
         headers.setdefault("Content-Type", "application/json")
         payload = {"email": email, "password": password}
@@ -412,7 +453,7 @@ class PowerBICloudSession(QObject):
         """Envia um GPKG real para /api/v1/admin/upload-layer-gpkg usando o token atual."""
         if requests is None:
             raise RuntimeError("O modulo 'requests' nao esta disponivel no ambiente do QGIS.")
-        url = self._build_url("/api/v1/admin/upload-layer-gpkg")
+        url = self._build_url("/admin/upload-layer-gpkg")
         headers = dict(self._auth_headers())
         headers.pop("Content-Type", None)  # requests define boundary para multipart
 
@@ -449,14 +490,17 @@ class PowerBICloudSession(QObject):
         return self.is_authenticated()
 
     def _fetch_remote_layers(self) -> List[Dict]:
-        payload = self._request_json("GET", self._config.get("layers_endpoint"), headers=self._auth_headers())
+        payload = self._request_json(
+            "GET",
+            sanitize_layers_endpoint(self._config.get("layers_endpoint")),
+            headers=self._auth_headers(),
+        )
         if not isinstance(payload, list):
             raise RuntimeError("Resposta invalida do endpoint de camadas.")
         layers: List[Dict] = []
         conn_meta = self._cloud_connection_meta()
-        layers_endpoint = (self._config.get("layers_endpoint") or "/api/v1/layers").strip() or "/api/v1/layers"
-        layers_endpoint = layers_endpoint.rstrip("/")
-        base_url = self._config.get("base_url") or ""
+        layers_endpoint = sanitize_layers_endpoint(self._config.get("layers_endpoint"))
+        base_url = sanitize_base_url(self._config.get("base_url"))
         token = self._session.get("token") or ""
         for item in payload:
             if not isinstance(item, dict):
@@ -602,15 +646,21 @@ class PowerBICloudSession(QObject):
         hosting_ready: Optional[bool] = None,
     ):
         updated = False
-        if base_url is not None and base_url != self._config.get("base_url"):
-            self._config["base_url"] = base_url.strip()
-            updated = True
-        if login_endpoint is not None and login_endpoint != self._config.get("login_endpoint"):
-            self._config["login_endpoint"] = login_endpoint.strip()
-            updated = True
-        if layers_endpoint is not None and layers_endpoint != self._config.get("layers_endpoint"):
-            self._config["layers_endpoint"] = layers_endpoint.strip()
-            updated = True
+        if base_url is not None:
+            new_base = sanitize_base_url(base_url)
+            if new_base != self._config.get("base_url"):
+                self._config["base_url"] = new_base
+                updated = True
+        if login_endpoint is not None:
+            new_login = sanitize_login_endpoint(login_endpoint)
+            if new_login != self._config.get("login_endpoint"):
+                self._config["login_endpoint"] = new_login
+                updated = True
+        if layers_endpoint is not None:
+            new_layers = sanitize_layers_endpoint(layers_endpoint)
+            if new_layers != self._config.get("layers_endpoint"):
+                self._config["layers_endpoint"] = new_layers
+                updated = True
         if hosting_ready is not None and bool(hosting_ready) != bool(self._config.get("hosting_ready")):
             self._config["hosting_ready"] = bool(hosting_ready)
             updated = True
