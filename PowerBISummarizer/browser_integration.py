@@ -19,6 +19,7 @@ from qgis.core import (
     QgsDataProvider,
     QgsDataSourceUri,
     QgsLayerItem,
+    QgsMessageLog,
     QgsProviderRegistry,
 )
 from qgis.gui import QgsGui
