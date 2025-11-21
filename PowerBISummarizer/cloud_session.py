@@ -227,6 +227,15 @@ class PowerBICloudSession(QObject):
         else:
             self._settings.remove(self.SESSION_KEY)
 
+    def _clear_connections(self, *, notify: bool = False):
+        """Remove qualquer cache local de camadas Cloud."""
+        self._connections = []
+        if notify:
+            try:
+                self.layersChanged.emit([])
+            except Exception:
+                pass
+
     def _default_config(self) -> Dict:
         return {
             "base_url": sanitize_base_url("https://cloud.powerbisummarizer.dev/api/v1"),
@@ -389,15 +398,6 @@ class PowerBICloudSession(QObject):
             pass
         self._authcfg_id = ""
         self._settings.remove(AUTHCFG_SETTINGS_KEY)
-
-    def _clear_connections(self, *, notify: bool = False):
-        """Remove qualquer cache local de camadas Cloud."""
-        self._connections = []
-        if notify:
-            try:
-                self.layersChanged.emit([])
-            except Exception:
-                pass
 
     def _apply_session(self, session: Dict, *, reload_layers: bool = True, notify: bool = True):
         self._session = dict(session)
@@ -939,8 +939,9 @@ class PowerBICloudSession(QObject):
             self._persist_config()
             print("[PowerBI Cloud] Configurações atualizadas.")
             self.configChanged.emit(dict(self._config))
-            self._clear_connections(notify=True)
-            self.reload_cloud_layers(force_remote_only=should_clear_catalog or self.hosting_ready())
+            if should_clear_catalog:
+                self._clear_connections(notify=True)
+                self.reload_cloud_layers(force_remote_only=True)
 
     def reload_cloud_layers(self, *, force_remote_only: bool = False):
         force_remote = force_remote_only or self.hosting_ready()
@@ -949,7 +950,7 @@ class PowerBICloudSession(QObject):
         self._is_reloading = True
         try:
             try:
-                if self._should_use_remote_layers() or force_remote:
+                if self._should_use_remote_layers():
                     self._connections = self._fetch_remote_layers()
                     print("[PowerBI Cloud] Catalogo remoto atualizado.")
                 elif force_remote:
@@ -960,7 +961,9 @@ class PowerBICloudSession(QObject):
                     print("[PowerBI Cloud] Catalogo mock atualizado.")
             except Exception as exc:  # pragma: no cover - runtime safeguard
                 if force_remote:
-                    print(f"[PowerBI Cloud] Falha ao atualizar catalogo remoto: {exc}. Mantendo catalogo vazio.")
+                    print(
+                        f"[PowerBI Cloud] Falha ao atualizar catalogo remoto: {exc}. Mantendo catalogo vazio (somente real)."
+                    )
                     self._connections = []
                 else:
                     print(f"[PowerBI Cloud] Falha ao atualizar catalogo remoto: {exc}. Voltando ao mock.")
