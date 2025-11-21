@@ -53,7 +53,7 @@ ROOT_ICON = _icon("plugin_logo.svg")
 CONNECTION_ICON = ROOT_ICON
 TABLE_ICON = _icon("Table.svg")
 OFFLINE_ICON = QgsApplication.getThemeIcon("/mIconDisconnected.svg")
-CLOUD_ICON = _icon("cloud.svg")
+CLOUD_ICON = _icon("cloud_database.svg")
 GROUP_ICON = QgsApplication.getThemeIcon("/mIconFolder.svg")
 if CLOUD_ICON.isNull():
     fallback_cloud = QgsApplication.getThemeIcon("/mIconCloud.svg")
@@ -427,12 +427,10 @@ class PowerBICloudLayerItem(QgsLayerItem):
 
     def _warn_real_access(self):
         if cloud_session.hosting_ready():
-            message = "Endpoints reais serão conectados assim que a hospedagem estiver publicada."
+            message = "As camadas do PowerBI Cloud sao abertas diretamente do servidor configurado no plugin."
         else:
-            message = "Cloud em preparação. Apenas camadas mock locais estão disponíveis no momento."
+            message = "Ative 'Hospedagem ativa' nas Configuracoes Cloud para usar apenas camadas reais do servidor."
         QMessageBox.information(None, "PowerBI Cloud", message)
-
-
     def _can_delete_layer(self) -> bool:
         if self.meta.get("mock_only", True):
             return False
@@ -471,8 +469,17 @@ class PowerBICloudLayerItem(QgsLayerItem):
             )
             QMessageBox.warning(None, "PowerBI Cloud", f"Falha ao excluir camada:\n{exc}")
             return
-        cloud_session.reload_mock_layers()
-        _refresh_browser_model()
+        parent_item = self.parent()
+        try:
+            if parent_item is not None:
+                remover = getattr(parent_item, "removeChildItem", None)
+                if callable(remover):
+                    remover(self)
+                elif hasattr(parent_item, "deleteChildren"):
+                    parent_item.deleteChildren()
+        except Exception:
+            pass
+        reload_cloud_catalog(force_remote_only=True)
         QgsMessageLog.logMessage(
             f"PowerBI Cloud camada {layer_name} excluida com sucesso.",
             "PowerBI Summarizer",
@@ -733,6 +740,25 @@ def _refresh_browser_model():
                 model.refresh()
     except Exception:
         pass
+
+
+def reload_cloud_catalog(force_remote_only: Optional[bool] = None) -> None:
+    """
+    Recarrega completamente o catálogo do PowerBI Cloud:
+    - Chama a API /layers (quando hospedagem ativa)
+    - Reconstrói a estrutura: PowerBI Cloud (beta) -> grupos -> camadas
+    - Atualiza a árvore do navegador
+    """
+    force_remote = cloud_session.hosting_ready() if force_remote_only is None else bool(force_remote_only)
+    try:
+        cloud_session.reload_cloud_layers(force_remote_only=force_remote)
+    except Exception as exc:
+        QgsMessageLog.logMessage(
+            f"PowerBI Cloud falhou ao recarregar catalogo: {exc}",
+            "PowerBI Summarizer",
+            Qgis.Warning,
+        )
+    _refresh_browser_model()
 
 
 def register_browser_provider() -> PowerBISummarizerBrowserProvider:
