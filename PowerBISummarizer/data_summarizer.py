@@ -64,7 +64,6 @@ from .power_query_table import PowerQueryTable, PROTECTED_COLUMNS_DEFAULT
 from .palette import palette_context
 from .slim_dialogs import SlimDialogBase, SlimLayerSelectionDialog, slim_get_item
 from .browser_integration import register_browser_provider, unregister_browser_provider
-from . import resources_rc  # noqa: F401
 
 
 def find_common_field_values(
@@ -161,12 +160,8 @@ class PowerBISummarizer:
 
     def initGui(self):
         icon_path = os.path.join(self.plugin_dir, "resources", "icon.svg")
-        new_icon_path = os.path.join(self.plugin_dir, "resources", "icons", "cloud_database.svg")
-        main_icon = QIcon(":/powerbi_summarizer_icons/cloud_database.svg")
-        if main_icon.isNull():
-            main_icon = QIcon(new_icon_path if os.path.exists(new_icon_path) else icon_path)
         self.action = QAction(
-            main_icon,
+            QIcon(icon_path),
             self.tr("Power BI Summarizer"),
             self.iface.mainWindow(),
         )
