@@ -98,7 +98,7 @@ class SidebarController:
         self.upload_button.setFixedSize(40, 40)
         self.upload_button.setIconSize(QSize(24, 24))
         self.upload_button.setProperty("navIcon", "true")
-        upload_icon_path = os.path.join(icons_dir, "cloud.svg")
+        upload_icon_path = os.path.join(icons_dir, "cloud_database.svg")
         if os.path.exists(upload_icon_path):
             self.upload_button.setIcon(QIcon(upload_icon_path))
         layout.addWidget(self.upload_button, 0, Qt.AlignBottom)
