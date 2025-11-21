@@ -295,6 +295,14 @@ class PowerBICloudDialog(SlimDialogBase):
                 "PowerBI Cloud",
                 message,
             )
+            try:
+                from .browser_integration import get_cloud_browser
+
+                browser = get_cloud_browser()
+                if browser is not None:
+                    browser.reload_cloud_catalog()
+            except Exception:
+                pass
             # Após login bem-sucedido, atualizamos o e-mail padrão vinculado à conexão ativa.
             self._persist_cloud_user_from_login(username)
             cloud_session.update_saved_credentials(username, password, self.remember_checkbox.isChecked())

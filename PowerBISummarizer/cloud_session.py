@@ -899,6 +899,10 @@ class PowerBICloudSession(QObject):
         self._session = {}
         self._persist_session()
         self._clear_connections(notify=True)
+        try:
+            self.reload_cloud_layers(force_remote_only=self.hosting_ready())
+        except Exception:
+            pass
         print(f"[PowerBI Cloud] Sessao encerrada para {username}.")
         self.sessionChanged.emit({})
 
@@ -939,9 +943,20 @@ class PowerBICloudSession(QObject):
             self._persist_config()
             print("[PowerBI Cloud] Configurações atualizadas.")
             self.configChanged.emit(dict(self._config))
+            self._clear_connections(notify=True)
             if should_clear_catalog:
-                self._clear_connections(notify=True)
                 self.reload_cloud_layers(force_remote_only=True)
+            else:
+                try:
+                    self.reload_cloud_layers(force_remote_only=self.hosting_ready())
+                except Exception:
+                    pass
+            try:
+                from .browser_integration import reload_cloud_catalog
+
+                reload_cloud_catalog(force_remote_only=self.hosting_ready())
+            except Exception:
+                pass
 
     def reload_cloud_layers(self, *, force_remote_only: bool = False):
         force_remote = force_remote_only or self.hosting_ready()

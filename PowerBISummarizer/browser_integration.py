@@ -26,6 +26,7 @@ from qgis.core import (
 )
 from qgis.gui import QgsGui
 
+from . import resources_rc  # noqa: F401
 from .cloud_session import cloud_session
 from .cloud_dialogs import open_cloud_dialog
 from .quick_connect_dialogs import PostgresQuickConnectDialog
@@ -43,7 +44,12 @@ _ICON_DIR = os.path.join(_HERE, "resources", "icons")
 
 
 def _icon(name: str) -> QIcon:
-    path = os.path.join(_ICON_DIR, name)
+    if name.startswith(":/"):
+        resource_icon = QIcon(name)
+        if not resource_icon.isNull():
+            return resource_icon
+    filename = name.split("/")[-1]
+    path = os.path.join(_ICON_DIR, filename)
     if os.path.exists(path):
         return QIcon(path)
     return QIcon()
@@ -53,7 +59,7 @@ ROOT_ICON = _icon("plugin_logo.svg")
 CONNECTION_ICON = ROOT_ICON
 TABLE_ICON = _icon("Table.svg")
 OFFLINE_ICON = QgsApplication.getThemeIcon("/mIconDisconnected.svg")
-CLOUD_ICON = _icon("cloud_database.svg")
+CLOUD_ICON = _icon(":/powerbi_summarizer_icons/cloud_database.svg")
 GROUP_ICON = QgsApplication.getThemeIcon("/mIconFolder.svg")
 if CLOUD_ICON.isNull():
     fallback_cloud = QgsApplication.getThemeIcon("/mIconCloud.svg")
@@ -326,6 +332,23 @@ class PowerBICloudRootItem(QgsDataCollectionItem):
         for group_key in sorted(grouped.keys(), key=lambda value: (value == "", value.lower())):
             items.append(PowerBICloudGroupItem(self, group_key, grouped[group_key]))
         return items
+
+    def reload_cloud_catalog(self, force_remote_only: Optional[bool] = None) -> None:
+        """Recarrega o catalogo Cloud e atualiza o Navegador."""
+        force_remote = cloud_session.hosting_ready() if force_remote_only is None else bool(force_remote_only)
+        try:
+            cloud_session.reload_cloud_layers(force_remote_only=force_remote)
+        except Exception as exc:
+            QgsMessageLog.logMessage(
+                f"PowerBI Cloud falhou ao recarregar catalogo: {exc}",
+                "PowerBI Summarizer",
+                Qgis.Warning,
+            )
+        try:
+            self.refresh()
+        except Exception:
+            pass
+        _refresh_browser_model()
 
 
 class PowerBICloudLoginItem(QgsDataCollectionItem):
@@ -742,6 +765,47 @@ def _refresh_browser_model():
         pass
 
 
+def _browser_model():
+    try:
+        gui = QgsGui.instance()
+        if gui and hasattr(gui, "browserModel"):
+            return gui.browserModel()
+    except Exception:
+        return None
+    return None
+
+
+def get_cloud_browser() -> Optional["PowerBICloudRootItem"]:
+    """Retorna o item raiz do PowerBI Cloud no Navegador, se existir."""
+    model = _browser_model()
+    if model is None:
+        return None
+    try:
+        roots = model.rootItems()
+    except Exception:
+        roots = []
+    for root in roots or []:
+        target = None
+        # Verifica raiz do provider direto
+        if isinstance(root, PowerBISummarizerBrowserProvider):  # pragma: no cover - defensive
+            continue
+        if isinstance(root, PowerBIRootItem):
+            # Procura o item Cloud entre os filhos do root principal
+            try:
+                for idx in range(root.childCount()):
+                    child = root.child(idx)
+                    if isinstance(child, PowerBICloudRootItem):
+                        target = child
+                        break
+            except Exception:
+                target = None
+        if isinstance(root, PowerBICloudRootItem):
+            target = root
+        if target is not None:
+            return target
+    return None
+
+
 def reload_cloud_catalog(force_remote_only: Optional[bool] = None) -> None:
     """
     Recarrega completamente o catálogo do PowerBI Cloud:
@@ -749,6 +813,10 @@ def reload_cloud_catalog(force_remote_only: Optional[bool] = None) -> None:
     - Reconstrói a estrutura: PowerBI Cloud (beta) -> grupos -> camadas
     - Atualiza a árvore do navegador
     """
+    browser = get_cloud_browser()
+    if browser is not None:
+        browser.reload_cloud_catalog(force_remote_only=force_remote_only)
+        return
     force_remote = cloud_session.hosting_ready() if force_remote_only is None else bool(force_remote_only)
     try:
         cloud_session.reload_cloud_layers(force_remote_only=force_remote)
