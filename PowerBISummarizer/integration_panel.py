@@ -541,7 +541,9 @@ class IntegrationPanel(QWidget):
         open_cloud_dialog(self)
 
     def _refresh_cloud_layers(self):
-        self.cloud_session.reload_mock_layers()
+        from .browser_integration import reload_cloud_catalog
+
+        reload_cloud_catalog()
         self._on_cloud_layers_changed()
         QMessageBox.information(self, "PowerBI Cloud", "Catalogo Cloud atualizado.")
 
@@ -549,7 +551,7 @@ class IntegrationPanel(QWidget):
         QMessageBox.information(
             self,
             "PowerBI Cloud",
-            "Abra o Navegador do QGIS e expanda PowerBI Summarizer → PowerBI Cloud para carregar as camadas mock.",
+            "Abra o Navegador do QGIS e expanda PowerBI Summarizer → PowerBI Cloud para carregar as camadas disponiveis.",
         )
 
     def _refresh_cloud_summary(self):
@@ -563,6 +565,7 @@ class IntegrationPanel(QWidget):
     def _on_cloud_layers_changed(self, *_):
         stamp = QDateTime.currentDateTime().toString("dd/MM HH:mm")
         self.cloud_last_sync_label.setText(stamp)
+        self._refresh_cloud_summary()
 
     def _register_shortcuts(self):
         shortcut_open = QShortcut(QKeySequence("Ctrl+O"), self)

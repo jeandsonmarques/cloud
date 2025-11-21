@@ -1,0 +1,6 @@
+<RCC>
+  <qresource prefix="/powerbi_summarizer_icons">
+    <file alias="cloud_database.svg">icons/cloud_database.svg</file>
+    <file alias="integration_plug.svg">icons/integration_plug.svg</file>
+  </qresource>
+</RCC>

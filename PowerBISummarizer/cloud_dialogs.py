@@ -295,6 +295,12 @@ class PowerBICloudDialog(SlimDialogBase):
                 "PowerBI Cloud",
                 message,
             )
+            try:
+                from .browser_integration import reload_cloud_catalog
+
+                reload_cloud_catalog(force_remote_only=True)
+            except Exception:
+                pass
             # Após login bem-sucedido, atualizamos o e-mail padrão vinculado à conexão ativa.
             self._persist_cloud_user_from_login(username)
             cloud_session.update_saved_credentials(username, password, self.remember_checkbox.isChecked())
@@ -309,7 +315,9 @@ class PowerBICloudDialog(SlimDialogBase):
         cloud_session.logout()
 
     def _refresh_layers(self):
-        cloud_session.reload_mock_layers()
+        from .browser_integration import reload_cloud_catalog
+
+        reload_cloud_catalog()
         self._on_layers_changed()
         if cloud_session.session().get("mode") == "remote" and cloud_session.hosting_ready():
             message = "Catalogo Cloud atualizado a partir da API."

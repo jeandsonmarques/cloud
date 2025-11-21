@@ -19,7 +19,7 @@ class SidebarController:
     ICON_MAP = {
         "resumo": ("Resumo", "Table.svg"),
         "comparar": ("Comparar", "Workspace.svg"),
-        "integracao": ("Integra��ǜo", "Model.svg"),
+        "integracao": ("Integração", "integration_plug.svg"),
     }
 
     PAGE_MAP = {
